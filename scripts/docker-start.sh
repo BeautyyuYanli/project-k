@@ -3,6 +3,7 @@ set -euo pipefail
 
 CONTAINER_NAME="k-container"
 IMAGE_NAME="k-image:latest"
+SSH_HOST_PORT=2222
 
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 <workspace_path>" >&2
@@ -28,6 +29,8 @@ docker run -d \
   -e "PUID=$(id -u)" \
   -e "PGID=$(id -g)" \
   -v "${WORKSPACE_MOUNT}" \
+  -p "${SSH_HOST_PORT}:22" \
   "${IMAGE_NAME}"
 
 echo "started container ${CONTAINER_NAME}"
+echo "ssh: ssh -i \"${HOST_WORKSPACE}/.ssh/id_ed25519\" -p ${SSH_HOST_PORT} k@127.0.0.1"

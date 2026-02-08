@@ -5,34 +5,24 @@ ARG DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-ARG SUPERCRONIC_VERSION=v0.2.38
-
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
+        cron \
         curl \
         git \
-        gosu \
-        tini \
+        openssh-server \
+        supervisor \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv
 
-RUN set -eux; \
-    container_arch="$(dpkg --print-architecture)"; \
-    case "${container_arch}" in \
-      amd64) supercronic_arch='amd64' ;; \
-      arm64) supercronic_arch='arm64' ;; \
-      *) echo "Unsupported container architecture: ${container_arch}" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /usr/local/bin/supercronic \
-      "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-${supercronic_arch}"; \
-    chmod 0755 /usr/local/bin/supercronic
-
 WORKDIR /
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh \
+    && mkdir -p /var/run/sshd
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
