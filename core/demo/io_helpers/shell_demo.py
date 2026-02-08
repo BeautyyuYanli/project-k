@@ -3,7 +3,9 @@ from __future__ import annotations
 import sys
 
 import anyio
+
 from k.io_helpers.shell import ShellSession
+
 
 async def main() -> None:
     async with ShellSession("bash", timeout_seconds=1) as session:
@@ -23,4 +25,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     anyio.run(main)
-

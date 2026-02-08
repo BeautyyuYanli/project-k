@@ -10,7 +10,7 @@ from __future__ import annotations
 import subprocess
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Literal, Self, TypeAlias
+from typing import Literal, Self
 
 import anyio
 from anyio.abc import (
@@ -21,9 +21,8 @@ from anyio.abc import (
 )
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
-
 type NextResult = tuple[bytes, bytes, int | None]
-StreamName: TypeAlias = Literal["stdout", "stderr"]
+type StreamName = Literal["stdout", "stderr"]
 
 
 @dataclass(frozen=True)
@@ -31,7 +30,7 @@ class _StreamDone:
     stream: StreamName
 
 
-OutputEvent: TypeAlias = tuple[StreamName, bytes] | _StreamDone
+type OutputEvent = tuple[StreamName, bytes] | _StreamDone
 
 
 @dataclass
@@ -71,7 +70,9 @@ class ShellSession:
     _stderr_done: bool = field(init=False, default=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._out_send, self._out_recv = anyio.create_memory_object_stream[OutputEvent](1000)
+        self._out_send, self._out_recv = anyio.create_memory_object_stream[OutputEvent](
+            1000
+        )
 
     async def __aenter__(self) -> Self:
         try:
@@ -100,7 +101,11 @@ class ShellSession:
             # Publish early so interrupt() can clean up even if we fail mid-start.
             self._process = process
 
-            if process.stdin is None or process.stdout is None or process.stderr is None:
+            if (
+                process.stdin is None
+                or process.stdout is None
+                or process.stderr is None
+            ):
                 raise RuntimeError("Process started without stdin/stdout/stderr pipes")
 
             tg = await anyio.create_task_group().__aenter__()
@@ -144,10 +149,8 @@ class ShellSession:
                         break
         finally:
             # Best-effort signal that this stream is done.
-            try:
+            with suppress(BaseException):
                 await self._out_send.send(_StreamDone(stream=stream_name))
-            except Exception:
-                pass
 
     async def next(self, stdin: bytes | None) -> NextResult:
         """Send stdin and wait up to `timeout_seconds` for process exit.
@@ -201,13 +204,19 @@ class ShellSession:
         # chance to flush remaining output and send stream-done markers.
         if returncode is not None:
             flush_deadline = anyio.current_time() + self.post_exit_flush_seconds
-            while anyio.current_time() < flush_deadline and not (self._stdout_done and self._stderr_done):
-                await self._drain_output(stdout, stderr, timeout=self.post_exit_drain_wait_seconds)
+            while anyio.current_time() < flush_deadline and not (
+                self._stdout_done and self._stderr_done
+            ):
+                await self._drain_output(
+                    stdout, stderr, timeout=self.post_exit_drain_wait_seconds
+                )
         await self._drain_output(stdout, stderr, timeout=0)
 
         return (bytes(stdout), bytes(stderr), returncode)
 
-    async def _drain_output(self, stdout: bytearray, stderr: bytearray, *, timeout: float) -> None:
+    async def _drain_output(
+        self, stdout: bytearray, stderr: bytearray, *, timeout: float
+    ) -> None:
         """Drain buffered output, then optionally wait up to `timeout` for one event.
 
         The `timeout` applies only to the single blocking `receive()`; all other
@@ -218,7 +227,7 @@ class ShellSession:
         while True:
             try:
                 event = self._out_recv.receive_nowait()
-            except (anyio.WouldBlock, anyio.EndOfStream):
+            except anyio.WouldBlock, anyio.EndOfStream:
                 break
             self._apply_event(event, stdout, stderr)
 
@@ -240,11 +249,13 @@ class ShellSession:
         while True:
             try:
                 event = self._out_recv.receive_nowait()
-            except (anyio.WouldBlock, anyio.EndOfStream):
+            except anyio.WouldBlock, anyio.EndOfStream:
                 break
             self._apply_event(event, stdout, stderr)
 
-    def _apply_event(self, event: OutputEvent, stdout: bytearray, stderr: bytearray) -> None:
+    def _apply_event(
+        self, event: OutputEvent, stdout: bytearray, stderr: bytearray
+    ) -> None:
         if isinstance(event, _StreamDone):
             if event.stream == "stdout":
                 self._stdout_done = True

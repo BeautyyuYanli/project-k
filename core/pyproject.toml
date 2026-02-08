@@ -20,3 +20,28 @@ dev = [
     "ruff>=0.15.0",
     "ty>=0.0.15",
 ]
+
+
+
+[tool.pdm.scripts]
+lint = "ruff check . --fix"
+format = "ruff format ."
+fix = {composite = ["format", "lint"]}
+typecheck = "ty check ."
+test = { cmd = "pytest", env = { PYTHONPATH = "src" } }
+
+[tool.ruff]
+target-version = "py314"
+extend-exclude = [".venv", ".pdm-build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "SIM", "PIE", "RUF"]
+ignore = ["N818", "E501", "SIM108", "SIM103", "B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.ty.src]
+exclude = ["tests/"]
