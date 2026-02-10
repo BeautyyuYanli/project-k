@@ -9,13 +9,36 @@ from k.runner_helpers.basic_os import BasicOSHelper
 
 @dataclass()
 class MyDeps:
+    """Dependencies for the agent run.
+
+    Lifecycle:
+        `MyDeps` owns a `ShellSessionManager` which may keep subprocesses alive
+        across multiple tool calls. Always close it when the deps are no longer
+        needed (prefer `async with MyDeps(...)`).
+    """
+
     config: Config
     basic_os_helper: BasicOSHelper = field(init=False)
     shell_manager: ShellSessionManager = field(init=False)
+    _closed: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self):
         self.basic_os_helper = BasicOSHelper(config=self.config)
         self.shell_manager = ShellSessionManager()
+
+    async def __aenter__(self) -> MyDeps:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        await self.close()
+
+    async def close(self) -> None:
+        """Close resources owned by these deps (idempotent)."""
+
+        if self._closed:
+            return
+        self._closed = True
+        await self.shell_manager.close()
 
 
 @dataclass(slots=True)
@@ -60,7 +83,9 @@ async def bash(ctx: RunContext[MyDeps], text: str) -> BashEvent:
     return BashEvent.new(session_id, res, all_active_sessions=active_sessions)
 
 
-async def bash_input(ctx: RunContext[MyDeps], session_id: str, text: str) -> BashEvent | str:
+async def bash_input(
+    ctx: RunContext[MyDeps], session_id: str, text: str
+) -> BashEvent | str:
     """
     Send stdin to a bash session.
 
@@ -125,17 +150,13 @@ agent = Agent(
 
 async def main():
     config = Config()  # type: ignore
-    my_deps = MyDeps(config=config)
-
-    try:
+    async with MyDeps(config=config) as my_deps:
         res = await agent.run(
             deps=my_deps,
             # user_prompt="explore the environment. Use the tools concurrently if needed.",
             user_prompt="Demo your ability to use interactive commands",
         )
         print(res.output)
-    finally:
-            await my_deps.shell_manager.close()
 
 
 if __name__ == "__main__":
