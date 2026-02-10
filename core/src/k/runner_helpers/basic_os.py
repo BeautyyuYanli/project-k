@@ -3,6 +3,14 @@ from dataclasses import dataclass
 from k.config import Config
 
 
+def single_quote_escape(s: str) -> str:
+    return s.replace("'", "'\\''")
+
+
+def single_quote(s: str) -> str:
+    return "'" + single_quote_escape(s) + "'"
+
+
 @dataclass(slots=True)
 class BasicOSHelper:
     config: Config
@@ -10,11 +18,19 @@ class BasicOSHelper:
     def command_base(self) -> str:
         return f'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -tt -i "{self.config.fs_base!s}/{self.config.basic_os_sshkey!s}" -p {self.config.basic_os_port} {self.config.basic_os_user}@{self.config.basic_os_addr} '
 
-    def command(self, command: str) -> str:
+    def command(self, command: str, env: dict[str, str] | None = None) -> str:
+        if env is None:
+            env = {}
         return (
             self.command_base()
-            + "'export TERM=dumb; stty -echo; "
-            + command.replace("'", "'\\''")
+            + "'export TERM=dumb; stty -echo; set -a; . ~/.env; set +a; "
+            + single_quote_escape(
+                "".join(
+                    f"{key}='{single_quote_escape(value)}'; "
+                    for key, value in env.items()
+                )
+            )
+            + single_quote_escape(command)
             + "'"
         )
 
