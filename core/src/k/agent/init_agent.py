@@ -163,7 +163,7 @@ async def edit_file(
     """
     return await bash(
         ctx,
-        f"python3 ~/skills/edit/edit.py --filename {single_quote(filename)} --start-line {single_quote(str(start_line))} --old-content {single_quote(old_content)} --new-content {single_quote(new_content)}",
+        f"python3 ~/.kapybara/edit.py --filename {single_quote(filename)} --start-line {single_quote(str(start_line))} --old-content {single_quote(old_content)} --new-content {single_quote(new_content)}",
     )
 
 

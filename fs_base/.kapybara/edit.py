@@ -151,11 +151,9 @@ def apply_edit(
 
 
 def _parse_args(argv: list[str]) -> tuple[str, int, str, str]:
-    class _Parser(argparse.ArgumentParser):
-        def error(self, message: str) -> None:  # noqa: PLR6301
-            raise ValueError(message)
-
-    parser = _Parser(prog="edit.py")
+    # Use argparse's built-in non-exiting mode so we can handle parse errors and
+    # keep stdout/exit codes stable for callers.
+    parser = argparse.ArgumentParser(prog="edit.py", exit_on_error=False)
     parser.add_argument("--filename", required=True)
     parser.add_argument("--start-line", type=int, required=True)
     parser.add_argument("--old-content", required=True)
