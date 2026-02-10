@@ -1,6 +1,10 @@
 from dataclasses import dataclass, field
 
-from pydantic_ai import Agent, RunContext
+from typing import Literal
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent, RunContext, ToolOutput
+from uuid import uuid4
+import asyncio
 
 from k.config import Config
 from k.io_helpers.shell import NextResult, ShellSessionInfo, ShellSessionManager
@@ -18,6 +22,10 @@ class MyDeps:
     """
 
     config: Config
+    start_event: Event | None = None
+    bash_cmd_history: list[str] = field(default_factory=list)
+    stuck_warning: int = 0
+    stuck_warning_limit: int = 3
     basic_os_helper: BasicOSHelper = field(init=False)
     shell_manager: ShellSessionManager = field(init=False)
     _closed: bool = field(default=False, init=False, repr=False)
@@ -48,6 +56,7 @@ class BashEvent:
     stderr: str
     exit_code: int | None = None
     active_sessions: list[ShellSessionInfo] = field(default_factory=list)
+    system_msg: str | None = None
 
     @classmethod
     def new(
@@ -56,6 +65,7 @@ class BashEvent:
         tpl: NextResult,
         *,
         all_active_sessions: list[ShellSessionInfo],
+        system_msg: str | None = None,
     ) -> BashEvent:
         stdout, stderr, exit_code = tpl
         return BashEvent(
@@ -64,6 +74,7 @@ class BashEvent:
             stderr=stderr.decode(),
             exit_code=exit_code,
             active_sessions=all_active_sessions,
+            system_msg=system_msg,
         )
 
 
@@ -80,9 +91,18 @@ async def bash(
         ctx.deps.basic_os_helper.command(text),
         desc=text[:30] + ("..." if len(text) > 30 else ""),
     )
+    text = text.strip()
+    system_msg = None
+    if ctx.deps.bash_cmd_history and ctx.deps.bash_cmd_history[-1] == text:
+        if ctx.deps.stuck_warning >= ctx.deps.stuck_warning_limit:
+            system_msg = "You seems to be stuck. You MUST finish with kind: `stuck` right now."
+        else:
+            system_msg: str = "You are using the same bash command as the last time. If you get stuck, finish with kind: `stuck`."
+        ctx.deps.stuck_warning += 1
+    ctx.deps.bash_cmd_history.append(text.strip())
     res = await ctx.deps.shell_manager.next(session_id)
     active_sessions = await ctx.deps.shell_manager.list_sessions()
-    return BashEvent.new(session_id, res, all_active_sessions=active_sessions)
+    return BashEvent.new(session_id, res, all_active_sessions=active_sessions, system_msg=system_msg)
 
 
 async def bash_input(
@@ -147,6 +167,34 @@ async def edit_file(
     )
 
 
+class Event(BaseModel):
+    kind: Literal["instruct", "response", "stuck"]
+    id_: str = Field(default_factory=lambda: str(uuid4()))
+    text: str
+
+HandoffKind = Literal["response", "stuck"]
+class HandoffEvent(Event):
+    kind: HandoffKind
+
+async def handoff(
+    ctx: RunContext[MyDeps], kind: Literal["response", "stuck"], text: str
+) -> HandoffEvent:
+    """Finish the loop.
+
+    Args:
+        kind: The kind of handoff event. The value can be:
+              "response": The agent has completed.
+              "stuck": The agent is unable to proceed.
+        text: The related text message. When in the case of
+              - response: The text to send to the user.
+              - stuck: The text describing the situation and possible next steps for human intervention.
+    """
+    if ctx.deps.start_event is None:
+        id_ = str(uuid4())
+    else:
+        id_ = ctx.deps.start_event.id_
+    return HandoffEvent(kind=kind, id_=id_, text=text)
+
 bash_tool_prompt = """
 <BashInstruction>
 You have access to a Linux machine via bash shell.
@@ -160,27 +208,78 @@ If `exit_code` is an int, the session is finished and closed.
 </BashInstruction>
 """
 
-agent = Agent(
+agent: Agent[MyDeps, HandoffEvent] = Agent(
     model="openai:gpt-5.2",
     system_prompt=[
         bash_tool_prompt,
-        "You are a helpful assistant.",
+        "You are a helpful AI agent that can use the provided tools "
+        "and agent skills in ~/skills/ directory. "
+        "After finishing your work, use the `finish` tool to end the loop. "
+        "You can finish with kind: `stuck` if you get stuck, even when the work is not finished. "
     ],
     tools=[bash, bash_input, bash_wait, bash_interrupt, edit_file],
     deps_type=MyDeps,
-)
+    output_type=ToolOutput(handoff, name="finish")
+) # type: ignore
 
+
+
+def claim_read_and_empty(path: str) -> str:
+    import os
+    import uuid
+    claimed = f"{path}.{uuid.uuid4().hex}.claimed"
+
+    # Atomic on POSIX when source+target are on same filesystem
+    os.replace(path, claimed)
+
+    # Recreate empty file at original path
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    os.close(fd)
+
+    # Now read the claimed old contents
+    with open(claimed, "r", encoding="utf-8") as f:
+        data = f.read()
+
+    os.remove(claimed)
+
+    return data
 
 async def main():
     config = Config()  # type: ignore
-    async with MyDeps(config=config) as my_deps:
-        res = await agent.run(
-            deps=my_deps,
-            # user_prompt="explore the environment. Use the tools concurrently if needed.",
-            # user_prompt="Demo your ability to write JSON to a file, and the JSON should contain a long text field with markdown formatting to greeting the user with emojis and other complex style.",
-            user_prompt="You should edit `sample.py` to make all things async.",
-        )
-        print(res.output)
+    while True:
+        res = claim_read_and_empty("bus.jsonl")
+        lines = [line for line in res.strip().split("\n") if line.strip()]
+        events = [Event.model_validate_json(line) for line in lines]
+        for event in events:
+            match event.kind:
+                case "instruct":
+                    async def tmp(e: Event) -> None:
+                        async with MyDeps(config=config, start_event=e) as my_deps:
+                            resp = await agent.run(
+                                deps=my_deps,
+                                user_prompt=e.text,
+                            )
+                            output_event = resp.output
+                            with open("bus.jsonl", "a", encoding="utf-8") as f:
+                                f.write(output_event.model_dump_json() + "\n")
+                        
+                    _t = asyncio.create_task(tmp(event))
+                case "response":
+                    print(f"Received response event:\n{event.text}")
+                case "stuck":
+                    print(f"Received stuck event:\n{event.text}")
+                case _:
+                    print(f"Unknown event kind: {event.kind}")
+                    print(event.text)
+        await asyncio.sleep(1)
+    # async with MyDeps(config=config) as my_deps:
+    #     res = await agent.run(
+    #         deps=my_deps,
+    #         # user_prompt="explore the environment. Use the tools concurrently if needed.",
+    #         # user_prompt="Demo your ability to write JSON to a file, and the JSON should contain a long text field with markdown formatting to greeting the user with emojis and other complex style.",
+    #         user_prompt="You should edit `sample.py` to make all things async.",
+    #     )
+    #     print(res.output)
 
 
 if __name__ == "__main__":
