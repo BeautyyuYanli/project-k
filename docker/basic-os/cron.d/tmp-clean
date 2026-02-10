@@ -1,0 +1,6 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Every 10 minutes, delete regular files under /tmp older than 1 hour.
+# Logs go to the container's stdout/stderr via PID 1 file descriptors.
+*/10 * * * * root find /tmp -mindepth 1 -type f -mmin +60 -delete >/proc/1/fd/1 2>/proc/1/fd/2
