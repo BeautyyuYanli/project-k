@@ -12,8 +12,12 @@ class BasicOSHelper:
 
     def command(self, command: str) -> str:
         return (
-            self.command_base() + "'export TERM=dumb; stty -echo; " + command.replace("'", "'\\''") + "'"
+            self.command_base()
+            + "'export TERM=dumb; stty -echo; "
+            + command.replace("'", "'\\''")
+            + "'"
         )
+
 
 async def main():
     from k.io_helpers.shell import ShellSession, ShellSessionOptions
@@ -42,6 +46,7 @@ if __name__ == "__main__":
     import asyncio
 
     from dotenv import load_dotenv
+
     load_dotenv()
     load_dotenv("core/.env")
 

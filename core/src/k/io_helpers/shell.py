@@ -18,7 +18,6 @@ import secrets
 import subprocess
 from contextlib import suppress
 from dataclasses import dataclass, field
-from functools import cached_property
 from typing import Literal, Self
 
 import anyio
@@ -129,7 +128,9 @@ class ShellSessionManager:
                     f"Too many active sessions ({len(self._sessions)}/{self.max_sessions})"
                 )
 
-            session = ShellSession(command, options=options or ShellSessionOptions(), desc=desc)
+            session = ShellSession(
+                command, options=options or ShellSessionOptions(), desc=desc
+            )
             # Avoid id collisions within this process.
             for _ in range(20):
                 if session.session_id not in self._sessions:
