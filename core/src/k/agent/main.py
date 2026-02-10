@@ -4,7 +4,7 @@ from pydantic_ai import Agent, RunContext
 
 from k.config import Config
 from k.io_helpers.shell import NextResult, ShellSessionInfo, ShellSessionManager
-from k.runner_helpers.basic_os import BasicOSHelper
+from k.runner_helpers.basic_os import BasicOSHelper, single_quote
 
 
 @dataclass()
@@ -67,7 +67,9 @@ class BashEvent:
         )
 
 
-async def bash(ctx: RunContext[MyDeps], text: str) -> BashEvent:
+async def bash(
+    ctx: RunContext[MyDeps], text: str
+) -> BashEvent:
     """
     Start a new bash session with the given commands text.
 
@@ -124,6 +126,27 @@ async def bash_interrupt(ctx: RunContext[MyDeps], session_id: str) -> str:
     return "Session ended."
 
 
+async def edit_file(
+    ctx: RunContext[MyDeps],
+    filename: str,
+    start_line: int,
+    old_content: str,
+    new_content: str,
+) -> BashEvent:
+    """Edit a file by replacing a known slice of lines.
+
+    Args:
+        filename: Target file path (relative or absolute).
+        start_line: 1-based line number where `old_content` is expected to start.
+        old_content: The exact content expected at `start_line` (normalized for newlines).
+        new_content: The replacement content.
+    """
+    return await bash(
+        ctx,
+        f"python3 ~/skills/edit/edit.py --filename {single_quote(filename)} --start-line {single_quote(str(start_line))} --old-content {single_quote(old_content)} --new-content {single_quote(new_content)}",
+    )
+
+
 bash_tool_prompt = """
 <BashInstruction>
 You have access to a Linux machine via bash shell.
@@ -143,7 +166,7 @@ agent = Agent(
         bash_tool_prompt,
         "You are a helpful assistant.",
     ],
-    tools=[bash, bash_input, bash_wait, bash_interrupt],
+    tools=[bash, bash_input, bash_wait, bash_interrupt, edit_file],
     deps_type=MyDeps,
 )
 
@@ -154,7 +177,8 @@ async def main():
         res = await agent.run(
             deps=my_deps,
             # user_prompt="explore the environment. Use the tools concurrently if needed.",
-            user_prompt="Demo your ability to use interactive commands",
+            # user_prompt="Demo your ability to write JSON to a file, and the JSON should contain a long text field with markdown formatting to greeting the user with emojis and other complex style.",
+            user_prompt="You should edit `sample.py` to make all things async.",
         )
         print(res.output)
 
