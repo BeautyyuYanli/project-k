@@ -4,11 +4,13 @@ import sys
 
 import anyio
 
-from k.io_helpers.shell import ShellSession
+from k.io_helpers.shell import ShellSession, ShellSessionOptions
 
 
 async def main() -> None:
-    async with ShellSession("bash", timeout_seconds=1) as session:
+    async with ShellSession(
+        "bash", options=ShellSessionOptions(timeout_seconds=1)
+    ) as session:
         user_input = ""
         while True:
             user_input += "\n"
