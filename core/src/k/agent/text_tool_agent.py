@@ -20,25 +20,8 @@ from pydantic_ai.exceptions import ToolRetryError
 from pydantic_ai.tools import (
     Tool,
     ToolCallPart,
-    ToolDefinition,
     ToolParams,
 )
-
-
-def collect_text_tools(tools: Sequence[Tool]) -> str:
-    tools_def = ""
-    for tool in tools:
-        tool_def = cast(ToolDefinition, tool.tool_def)
-        tool_def_string = json.dumps(
-            {
-                "tool_name": tool_def.name,
-                "description": tool_def.description,
-                "parameters_json_schema": tool_def.parameters_json_schema,
-            },
-            ensure_ascii=False,
-        )
-        tools_def += tool_def_string + "\n"
-    return tools_def
 
 
 def get_text_tool_instruction(tools: Sequence[Tool[Any]]) -> str:
@@ -49,22 +32,27 @@ Some tools take a long `text` argument. For those tools, do NOT put the long tex
 
 Output exactly one assistant text message in this format:
 1) One JSON object: {"tool_name": "...", "arguments": {...}} with all arguments except `text`
-   - If `text` is the only argument for the tool, you may omit `arguments`: {"tool_name": "..."}
+   - If `text` is the only argument for the tool, you may omit `arguments`
+   - It must NOT contain the `text` argument.
 2) Then the raw text wrapped by markers:
 $TextArgStart$
 ... long text ...
 $TextArgEnd$
+3) No other content, only the exactly one JSON object and the long text with markers.
 
 Example:
+The normal tool call message:
+{"tool_name": "greeting", "arguments": {"to": "Alice", "text": "This is a long text\n...Very long text"}}
+should be output as assistant text message:
 {"tool_name": "greeting", "arguments": {"to": "Alice"}}
 $TextArgStart$
 This is a long text
 ...Very long text
 $TextArgEnd$
 
-Tools that use this format:
+Tools that can use this format:
 """
-        + collect_text_tools(tools)
+        + ",".join([t.name for t in tools])
         + """
 </TextToolInstruction>
 """
@@ -130,7 +118,7 @@ class TextTools[AgentDepsT, T]:
                 ) from e
             if not isinstance(tool_call_obj, dict):
                 raise ModelRetry(
-                    "Invalid JSON tool call: expected a JSON object (dict) at the top level."
+                    "Invalid JSON for text tool call: expected a JSON object (dict) at the top level."
                 )
             return cast(dict[str, Any], tool_call_obj)
 
@@ -140,7 +128,7 @@ class TextTools[AgentDepsT, T]:
             tool_call_obj, idx = decoder.raw_decode(stripped)
             if not isinstance(tool_call_obj, dict):
                 raise ModelRetry(
-                    "Invalid JSON tool call: expected a JSON object (dict) at the top level."
+                    "Invalid JSON for text tool call: expected a JSON object (dict) at the top level."
                 )
             trailing = stripped[idx:].strip()
             return cast(dict[str, Any], tool_call_obj), trailing
@@ -188,10 +176,8 @@ class TextTools[AgentDepsT, T]:
             tool_call, _trailing = parse_json_prefix(stripped_text)
         except json.JSONDecodeError as e:
             raise ModelRetry(
-                "Tool call format error.\n"
-                "Provide either:\n"
-                f"1) JSON + `{text_arg_start}`...`{text_arg_end}` markers, or\n"
-                "2) A single JSON object (no markers).\n"
+                "Text tool call format error.\n"
+                "Provide JSON + $TextArgStart$...$TextArgEnd$.\n"
                 f"JSON error: {e}"
             ) from e
 
@@ -203,7 +189,7 @@ class TextTools[AgentDepsT, T]:
 
         arguments = tool_call.get("arguments") or {}
         if not isinstance(arguments, dict):
-            raise ModelRetry("`arguments` must be a JSON object (dict).")
+            raise ModelRetry("`arguments` must be a JSON object.")
         args = dict(cast(dict[str, Any], arguments))
         return ToolCallPart(tool_name=tool_name, args=args)
 
