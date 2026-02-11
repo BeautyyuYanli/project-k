@@ -29,6 +29,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from k.agent.memory.entities import MemoryRecord
+from k.agent.memory.store import MemoryStore, coerce_uuid
 
 
 @dataclass(slots=True)
@@ -37,7 +38,7 @@ class _CacheKey:
     size: int
 
 
-class JsonlMemoryRecordStore:
+class JsonlMemoryRecordStore(MemoryStore):
     """Query `MemoryRecord` objects stored in a JSONL file.
 
     Args:
@@ -79,7 +80,7 @@ class JsonlMemoryRecordStore:
         """Return a record by id, or `None` if missing."""
 
         self._load_if_needed()
-        record_id = _coerce_uuid(id_)
+        record_id = coerce_uuid(id_)
         return self._by_id.get(record_id)
 
     def get_by_ids(
@@ -94,7 +95,7 @@ class JsonlMemoryRecordStore:
 
         self._load_if_needed()
 
-        record_ids = {_coerce_uuid(id_) for id_ in ids}
+        record_ids = {coerce_uuid(id_) for id_ in ids}
         missing = [id_ for id_ in record_ids if id_ not in self._by_id]
         if strict and missing:
             missing_str = ", ".join(str(i) for i in sorted(missing))
@@ -312,7 +313,7 @@ class JsonlMemoryRecordStore:
     def _coerce_record(self, record: MemoryRecord | UUID | str) -> MemoryRecord:
         if isinstance(record, MemoryRecord):
             return record
-        record_id = _coerce_uuid(record)
+        record_id = coerce_uuid(record)
         rec = self._by_id.get(record_id)
         if rec is None:
             raise KeyError(f"Unknown MemoryRecord id: {record_id}")
@@ -335,15 +336,6 @@ class JsonlMemoryRecordStore:
             missing_str = ", ".join(str(i) for i in missing)
             raise KeyError(f"Missing {link_name} record(s): {missing_str}")
         return res
-
-
-def _coerce_uuid(value: UUID | str) -> UUID:
-    if isinstance(value, UUID):
-        return value
-    try:
-        return UUID(value)
-    except ValueError as e:
-        raise ValueError(f"Invalid UUID: {value!r}") from e
 
 
 def _read_jsonl_memory_records(

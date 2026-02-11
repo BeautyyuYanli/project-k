@@ -21,6 +21,7 @@ class MemoryRecord(BaseModel):
         return str(self.id_.hex)[:8]
 
     def dump_raw_pair(self) -> str:
-        return self.model_dump_json(exclude=["detailed", "compacted"])
+        return self.model_dump_json(exclude={"detailed", "compacted"})
+
     def dump_compated(self) -> str:
-        return self.model_dump_json(exclude=["detailed"])
+        return self.model_dump_json(exclude={"detailed"})
