@@ -259,7 +259,10 @@ def claim_read_and_empty(path: str) -> str:
 
 
 async def agent_run(
-    model: Model | KnownModelName, config: Config, instruct: str, memory_string: str | None = None
+    model: Model | KnownModelName,
+    config: Config,
+    instruct: str,
+    memory_string: str | None = None,
 ) -> tuple[HandoffEvent, list[ModelRequest | ModelResponse]]:
     async with MyDeps(config=config) as my_deps:
         res = await agent.run(
@@ -303,14 +306,24 @@ async def main():
             print("Exiting the agent loop.")
             break
         latest_mem = mem_store.get_latest()
-        recent_ancestors_mem = set([*mem_store.get_ancestors(latest_mem, level=5), latest_mem] if latest_mem else [])
-        more_ancestors_mem = set([*mem_store.get_ancestors(latest_mem, level=20), latest_mem] if latest_mem else [])
+        recent_ancestors_mem = set(
+            [*mem_store.get_ancestors(latest_mem, level=5), latest_mem]
+            if latest_mem
+            else []
+        )
+        more_ancestors_mem = set(
+            [*mem_store.get_ancestors(latest_mem, level=20), latest_mem]
+            if latest_mem
+            else []
+        )
         all_mem = mem_store.get_by_ids(more_ancestors_mem)
         mem_string = "\n".join(
             x.dump_compated() if x.id_ in recent_ancestors_mem else x.dump_raw_pair()
             for x in all_mem
         )
-        output, detailed = await agent_run(model, config, instruct, memory_string=mem_string)
+        output, detailed = await agent_run(
+            model, config, instruct, memory_string=mem_string
+        )
         raw_pair = (instruct, output.text)
         compacted = await run_compaction(
             model=model,
@@ -336,6 +349,7 @@ async def main_1():
         for event in events:
             match event.kind:
                 case "instruct":
+
                     async def tmp(e: Event) -> None:
                         async with MyDeps(config=config, start_event=e) as my_deps:
                             resp = await agent.run(
