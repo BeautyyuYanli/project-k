@@ -1,11 +1,18 @@
+import asyncio
+from copy import copy
 from dataclasses import dataclass, field
-
+from datetime import datetime
 from typing import Literal
+from uuid import uuid4
+
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext, ToolOutput
-from uuid import uuid4
-import asyncio
+from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
+from pydantic_ai.models import KnownModelName, Model
+from rich import print
 
+from k.agent.memory.compactor import run_compaction
+from k.agent.memory.entities import MemoryRecord
 from k.config import Config
 from k.io_helpers.shell import NextResult, ShellSessionInfo, ShellSessionManager
 from k.runner_helpers.basic_os import BasicOSHelper, single_quote
@@ -78,9 +85,7 @@ class BashEvent:
         )
 
 
-async def bash(
-    ctx: RunContext[MyDeps], text: str
-) -> BashEvent:
+async def bash(ctx: RunContext[MyDeps], text: str) -> BashEvent:
     """
     Start a new bash session with the given commands text.
 
@@ -95,14 +100,18 @@ async def bash(
     system_msg = None
     if ctx.deps.bash_cmd_history and ctx.deps.bash_cmd_history[-1] == text:
         if ctx.deps.stuck_warning >= ctx.deps.stuck_warning_limit:
-            system_msg = "You seems to be stuck. You MUST finish with kind: `stuck` right now."
+            system_msg = (
+                "You seems to be stuck. You MUST finish with kind: `stuck` right now."
+            )
         else:
-            system_msg: str = "You are using the same bash command as the last time. If you get stuck, finish with kind: `stuck`."
+            system_msg = "You are using the same bash command as the last time. If you get stuck, finish with kind: `stuck`."
         ctx.deps.stuck_warning += 1
     ctx.deps.bash_cmd_history.append(text.strip())
     res = await ctx.deps.shell_manager.next(session_id)
     active_sessions = await ctx.deps.shell_manager.list_sessions()
-    return BashEvent.new(session_id, res, all_active_sessions=active_sessions, system_msg=system_msg)
+    return BashEvent.new(
+        session_id, res, all_active_sessions=active_sessions, system_msg=system_msg
+    )
 
 
 async def bash_input(
@@ -172,9 +181,13 @@ class Event(BaseModel):
     id_: str = Field(default_factory=lambda: str(uuid4()))
     text: str
 
+
 HandoffKind = Literal["response", "stuck"]
+
+
 class HandoffEvent(Event):
     kind: HandoffKind
+
 
 async def handoff(
     ctx: RunContext[MyDeps], kind: Literal["response", "stuck"], text: str
@@ -186,14 +199,15 @@ async def handoff(
               "response": The agent has completed.
               "stuck": The agent is unable to proceed.
         text: The related text message. When in the case of
-              - response: The text to send to the user.
-              - stuck: The text describing the situation and possible next steps for human intervention.
+              - response: The text to response.
+              - stuck: The text describing the situation
     """
     if ctx.deps.start_event is None:
         id_ = str(uuid4())
     else:
         id_ = ctx.deps.start_event.id_
     return HandoffEvent(kind=kind, id_=id_, text=text)
+
 
 bash_tool_prompt = """
 <BashInstruction>
@@ -209,24 +223,23 @@ If `exit_code` is an int, the session is finished and closed.
 """
 
 agent: Agent[MyDeps, HandoffEvent] = Agent(
-    model="openai:gpt-5.2",
     system_prompt=[
         bash_tool_prompt,
         "You are a helpful AI agent that can use the provided tools "
         "and agent skills in ~/skills/ directory. "
         "After finishing your work, use the `finish` tool to end the loop. "
-        "You can finish with kind: `stuck` if you get stuck, even when the work is not finished. "
+        "You can finish with kind: `stuck` if you get stuck, even when the work is not finished. ",
     ],
     tools=[bash, bash_input, bash_wait, bash_interrupt, edit_file],
     deps_type=MyDeps,
-    output_type=ToolOutput(handoff, name="finish")
-) # type: ignore
-
+    output_type=ToolOutput(handoff, name="finish"),
+)  # type: ignore
 
 
 def claim_read_and_empty(path: str) -> str:
     import os
     import uuid
+
     claimed = f"{path}.{uuid.uuid4().hex}.claimed"
 
     # Atomic on POSIX when source+target are on same filesystem
@@ -237,15 +250,85 @@ def claim_read_and_empty(path: str) -> str:
     os.close(fd)
 
     # Now read the claimed old contents
-    with open(claimed, "r", encoding="utf-8") as f:
+    with open(claimed, encoding="utf-8") as f:
         data = f.read()
 
     os.remove(claimed)
 
     return data
 
+
+async def agent_run(
+    model: Model | KnownModelName, config: Config, instruct: str, memory_string: str | None = None
+) -> tuple[HandoffEvent, list[ModelRequest | ModelResponse]]:
+    async with MyDeps(config=config) as my_deps:
+        res = await agent.run(
+            model=model,
+            deps=my_deps,
+            user_prompt=(
+                f"<System>Datetime Now: {datetime.now()}</System>"
+                f"<Instruct>{instruct}</Instruct>",
+                f"<Memory>{memory_string}</Memory>" if memory_string else "",
+            ),
+        )
+    msgs: list[ModelRequest | ModelResponse] = res.new_messages()
+    first_msg = msgs[0]
+    if isinstance(first_msg, ModelRequest):
+        last_part = first_msg.parts[-1]
+        if isinstance(last_part, UserPromptPart):
+            last_part = copy(last_part)
+            last_part.content = instruct  # update the first message's instruct part to the current instruct
+        first_msg = copy(first_msg)
+        first_msg.parts = [last_part]  # only keep the instruct
+    msgs = [
+        first_msg,
+        *msgs[1:-1],
+    ]  # remove initial message and final finish message
+    return res.output, msgs
+
+
 async def main():
+    from rich import print
+
+    from k.agent.memory.simple import JsonlMemoryRecordStore
+
     config = Config()  # type: ignore
+    model = "openai:gpt-5.2"
+    mem_store = JsonlMemoryRecordStore(
+        path="./mem.jsonl",
+    )
+    while True:
+        instruct = input("\nEnter your instruction (or 'exit' to quit): ")
+        if instruct.lower() in {"exit", "quit"}:
+            print("Exiting the agent loop.")
+            break
+        latest_mem = mem_store.get_latest()
+        recent_ancestors_mem = set([*mem_store.get_ancestors(latest_mem, level=5), latest_mem] if latest_mem else [])
+        more_ancestors_mem = set([*mem_store.get_ancestors(latest_mem, level=20), latest_mem] if latest_mem else [])
+        all_mem = mem_store.get_by_ids(more_ancestors_mem)
+        mem_string = "\n".join(
+            x.dump_compated() if x.id_ in recent_ancestors_mem else x.dump_raw_pair()
+            for x in all_mem
+        )
+        output, detailed = await agent_run(model, config, instruct, memory_string=mem_string)
+        raw_pair = (instruct, output.text)
+        compacted = await run_compaction(
+            model=model,
+            detailed=detailed,
+        )
+        mem = MemoryRecord(
+            raw_pair=raw_pair,
+            compacted=compacted,
+            detailed=detailed,
+            parents=[latest_mem] if latest_mem is not None else [],
+        )
+        mem_store.append(mem)
+        print(compacted)
+
+
+async def main_1():
+    config = Config()  # type: ignore
+    tasks: set[asyncio.Task[None]] = set()
     while True:
         res = claim_read_and_empty("bus.jsonl")
         lines = [line for line in res.strip().split("\n") if line.strip()]
@@ -262,8 +345,10 @@ async def main():
                             output_event = resp.output
                             with open("bus.jsonl", "a", encoding="utf-8") as f:
                                 f.write(output_event.model_dump_json() + "\n")
-                        
-                    _t = asyncio.create_task(tmp(event))
+
+                    task = asyncio.create_task(tmp(event))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
                 case "response":
                     print(f"Received response event:\n{event.text}")
                 case "stuck":
