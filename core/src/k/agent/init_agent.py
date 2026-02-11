@@ -172,7 +172,10 @@ async def edit_file(
     """
     return await bash(
         ctx,
-        f"python3 ~/skills/meta/edit_file/edit.py --filename {single_quote(filename)} --start-line {single_quote(str(start_line))} --old-content {single_quote(old_content)} --new-content {single_quote(new_content)}",
+        f"python3 ~/skills/meta/edit_file/edit.py --filename {single_quote(filename)} --old-content {single_quote(old_content)} --new-content {single_quote(new_content)} "
+        + (f"--start-line {single_quote(str(start_line))}"
+        if start_line is not None
+        else ""),
     )
 
 
@@ -217,6 +220,8 @@ You can run commands on the machine using `bash` tools.
 `bash` always starts a new session and returns a `session_id`.
 Use that `session_id` with `bash_input`/`bash_wait`/`bash_interrupt`.
 
+You shouldn't use meaningless commands like `true` or `echo something` without further actions.
+
 If `exit_code` is null, the session is still running.
 If `exit_code` is an int, the session is finished and closed.
 </BashInstruction>
@@ -225,8 +230,16 @@ If `exit_code` is an int, the session is finished and closed.
 agent: Agent[MyDeps, HandoffEvent] = Agent(
     system_prompt=[
         bash_tool_prompt,
-        "You are a helpful AI agent that can use the provided tools "
-        "and agent skills in ~/skills/ directory. "
+        "You are a helpful AI agent that can use the provided tools and skills in ~/skills/ directory. "
+        "You should firstly understand the intention of the instruction, that may in the context of the recent memories' raw_pair. "
+        "If the intention is ambiguous, you should finish soon instead of starting the work. "
+
+        "Most env vars required by the skills are already set up for you. "
+        "If not, ask to provide them to set in the ~/.env file. "
+        "There is a `create_skill` tool available for you to create new skills. "
+        "You can install new softwares to /App and create new skills to use them. "
+        "/tmp is for you to use as temporary storage. ",
+
         "After finishing your work, use the `finish` tool to end the loop. "
         "You can finish with kind: `stuck` if you get stuck, even when the work is not finished. ",
     ],
