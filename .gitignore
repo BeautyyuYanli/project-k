@@ -1,4 +1,9 @@
-data/
+data/*
+!data/fs/
+data/fs/*
+!data/fs/skills/
+data/fs/skills/*
 !data/fs/skills/core/
 !data/fs/skills/meta/
+
 *.jsonl
