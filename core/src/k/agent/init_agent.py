@@ -1,9 +1,10 @@
 import asyncio
+from collections.abc import Sequence
 from copy import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -14,11 +15,11 @@ from rich import print
 
 from k.agent.memory.compactor import run_compaction
 from k.agent.memory.entities import MemoryRecord
+from k.agent.memory.folder import FolderMemoryStore
 from k.config import Config
 from k.io_helpers.shell import NextResult, ShellSessionInfo, ShellSessionManager
 from k.runner_helpers.basic_os import BasicOSHelper, single_quote
 
-from k.agent.memory.folder import FolderMemoryStore
 
 @dataclass()
 class MyDeps:
@@ -217,7 +218,6 @@ async def handoff(
     return HandoffEvent(kind=kind, id_=id_, text=text)
 
 
-
 bash_tool_prompt = """
 <BashInstruction>
 You have access to a Linux machine via a bash shell, exposed through these tools:
@@ -315,7 +315,6 @@ def concat_skills_prompt(ctx: RunContext[MyDeps]) -> str:
     return f"<BasicSkills>{skills_md}</BasicSkills>"
 
 
-
 def claim_read_and_empty(path: str) -> str:
     import os
     import uuid
@@ -337,6 +336,7 @@ def claim_read_and_empty(path: str) -> str:
 
     return data
 
+
 def _strip_history(msgs: list[ModelRequest | ModelResponse], instruct: str):
     first_msg = msgs[0]
     if isinstance(first_msg, ModelRequest):
@@ -352,7 +352,7 @@ def _strip_history(msgs: list[ModelRequest | ModelResponse], instruct: str):
     ]  # remove initial message and final finish message
     return msgs
 
-    
+
 async def _memory_select(
     memory_store: FolderMemoryStore,
     parent_memories: list[str],
@@ -360,16 +360,12 @@ async def _memory_select(
     recent_mem = set(parent_memories)
     all_mem = set(parent_memories)
     for mem in parent_memories:
-        recent_mem.union(
-            memory_store.get_ancestors(mem, level=3)
-        )
-        all_mem.union(
-            memory_store.get_ancestors(mem, level=10)
-        )
+        recent_mem.union(memory_store.get_ancestors(mem, level=3))
+        all_mem.union(memory_store.get_ancestors(mem, level=10))
 
     all_mem_rec = memory_store.get_by_ids(all_mem)
     return all_mem_rec, recent_mem
-    
+
 
 async def agent_run(
     model: Model | KnownModelName,
@@ -380,7 +376,7 @@ async def agent_run(
     parent_memories: list[str] | None = None,
 ) -> tuple[HandoffEvent, MemoryRecord]:
     parent_memories = parent_memories or []
-    
+
     all_mem_rec, recent_mem = await _memory_select(
         memory_store,
         parent_memories,
@@ -393,15 +389,14 @@ async def agent_run(
     if message_history:
         message_history = copy(list(message_history))
         user_prompt_part = UserPromptPart(
-            f"<Memory>{memory_string}</Memory>\n" if parent_memories else ""
-            f"{instruct}",
+            f"<Memory>{memory_string}</Memory>\n" if parent_memories else f"{instruct}",
         )
         if not isinstance(message_history[-1], ModelRequest):
             message_history.append(ModelRequest(parts=[user_prompt_part]))
         else:
             message_history[-1].parts = copy(list(message_history[-1].parts))
             message_history[-1].parts.append(user_prompt_part)
-    
+
     async with MyDeps(config=config, memory_storage=memory_store) as my_deps:
         res = await agent.run(
             model=model,
@@ -416,14 +411,14 @@ async def agent_run(
     msgs: list[ModelRequest | ModelResponse] = res.new_messages()
     msgs = _strip_history(msgs, instruct)
     compacted = await run_compaction(
-            model=model,
-            detailed=msgs,
+        model=model,
+        detailed=msgs,
     )
     mem = MemoryRecord(
-            raw_pair=(instruct, res.output.text),
-            compacted=compacted,
-            parents=parent_memories,
-            detailed=msgs,
+        raw_pair=(instruct, res.output.text),
+        compacted=compacted,
+        parents=parent_memories,
+        detailed=msgs,
     )
     return res.output, mem
 
