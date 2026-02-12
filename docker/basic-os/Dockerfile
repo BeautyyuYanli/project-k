@@ -17,9 +17,12 @@ RUN apt-get update \
         ripgrep \
         wget \
         ffmpeg \
+        jq \
+        fd-find \
+        plocate \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv ast-grep-cli
 
 WORKDIR /
 
