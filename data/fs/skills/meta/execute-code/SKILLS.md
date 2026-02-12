@@ -1,38 +1,45 @@
 ---
 name: execute-code
-description: Runs scripts reproducibly (esp. uv scripts with inline deps).
+description: Runs scripts reproducibly via `uv` PEP 723 scripts (recommended).
 ---
 
 # execute-code
 
 Ref: https://docs.astral.sh/uv/guides/scripts/
 
-## Inline deps in-file (PEP 723)
-Top of `script.py`:
+## Recommended format: `uv` shebang + PEP 723
+Example: at the very top of `script.py`
 ```py
+#!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.12"          # optional
 # dependencies = ["requests<3", "rich"]
 # ///
 ```
 
-Create/update the block:
+Create/update the inline dependency block:
 ```bash
-uv init --script script.py --python 3.12
 uv add --script script.py 'requests<3' rich
 ```
 
-## Execute
+## Run
 ```bash
-uv run script.py
-uv run - <<'PY'
-print('hello')
-PY
-uv run --with rich --with 'requests<3' script.py   # per-run deps (no inline block)
+chmod +x script.py
+./script.py
 ```
 
-Project dir (`pyproject.toml` present):
-- plain script: `uv run --no-project script.py` (flag before script)
-- PEP 723 script: uv ignores project deps (usually no `--no-project` needed)
+## Heredoc example (quick one-off script)
+```bash
+cat > /tmp/script.py <<'PY'
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["requests<3"]
+# ///
 
-Tip: prefer `uv run --no-project` for truly one-off scripts to avoid surprising imports from the current repo.
+import requests
+print(requests.get("https://example.com").status_code)
+PY
+chmod +x /tmp/script.py
+/tmp/script.py
+```

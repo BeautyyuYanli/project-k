@@ -21,6 +21,7 @@ Groups are an organizing convention (e.g. `core/`, `meta/`, `misc/`) and are not
   - Official docs
   - Current version/API (if relevant)
   - Skill created (date)
+- If you add a **sidecar script** (an executable helper in the skill folder, e.g. `tool.py`), prefer a **PEP 723** inline-deps script and make it directly runnable via an `uv` shebang.
 
 Frontmatter (required):
 ```yaml
@@ -44,3 +45,13 @@ description: <one-line, third-person>
 ## Usage
 MD
 ```
+
+## Sidecar script (optional)
+If the skill needs an executable helper script, put it next to the doc (e.g. `~/skills/<group>/<skill-name>/tool.py`) and make it runnable directly.
+
+Remember to `chmod +x tool.py`. And use it like this in the skill doc:
+```bash
+./tool.py
+```
+
+For the recommended `uv` shebang + PEP 723 inline-dependencies pattern (and copy/paste examples), see: `~/skills/meta/execute-code/SKILLS.md`.
