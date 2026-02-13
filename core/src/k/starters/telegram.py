@@ -115,18 +115,6 @@ class TelegramBotApiError(RuntimeError):
     """Raised when Telegram Bot API returns a non-ok response or invalid JSON."""
 
 
-@dataclass(slots=True)
-class _InFlightChatRun:
-    """Tracks a background agent_run for a specific chat group."""
-
-    chat_id: int | None
-    done: anyio.Event
-    batch_updates: list[dict[str, Any]]
-    succeeded: bool = False
-    output: str = ""
-    error: str | None = None
-
-
 def telegram_update_to_event(update: dict[str, Any]) -> Event:
     """Convert a Telegram update dict into an agent `Event`."""
 
@@ -397,7 +385,7 @@ class TelegramBotApi:
         # Never log/print this URL; it embeds the bot token.
         return f"{_TELEGRAM_API_BASE}/bot{self.token}/{method}"
 
-    def get_me(self) -> dict[str, Any]:
+    def _get_me_sync(self) -> dict[str, Any]:
         request = urllib.request.Request(self._method_url("getMe"), method="GET")
         try:
             with urllib.request.urlopen(request, timeout=10) as resp:
@@ -427,7 +415,12 @@ class TelegramBotApi:
 
         return result
 
-    def get_updates(
+    async def get_me(self) -> dict[str, Any]:
+        """Fetch bot metadata via `getMe` (async wrapper)."""
+
+        return await to_thread.run_sync(self._get_me_sync)
+
+    def _get_updates_sync(
         self,
         *,
         offset: int | None,
@@ -483,14 +476,32 @@ class TelegramBotApi:
                 updates.append(item)
         return updates
 
+    async def get_updates(
+        self,
+        *,
+        offset: int | None,
+        timeout_seconds: int,
+    ) -> list[dict[str, Any]]:
+        """Long-poll `getUpdates` (async wrapper).
+
+        Note: stdlib `urllib` is blocking; this runs the request in a worker
+        thread so the polling loop and agent tasks remain async-friendly.
+        """
+
+        return await to_thread.run_sync(
+            lambda: self._get_updates_sync(
+                offset=offset, timeout_seconds=timeout_seconds
+            )
+        )
+
 
 async def _run_agent_for_chat_batch(
-    inflight: _InFlightChatRun,
+    chat_id: int | None,
+    batch_updates: list[dict[str, Any]],
     model: OpenRouterModel,
     config: Config,
     memory_store: FolderMemoryStore,
     append_lock: anyio.Lock,
-    batch_updates: list[dict[str, Any]],
 ) -> None:
     try:
         output, mem = await agent_run(
@@ -500,18 +511,17 @@ async def _run_agent_for_chat_batch(
             instruct=telegram_updates_to_event(batch_updates),
         )
     except Exception as e:  # pragma: no cover (model/runtime dependent)
-        inflight.error = f"{type(e).__name__}: {e}"
-        inflight.succeeded = False
-        inflight.done.set()
+        prefix = f"[chat_id={chat_id}] " if chat_id is not None else "[chat_id=?] "
+        print(f"[red]agent_run failed[/red]: {prefix}{type(e).__name__}: {e}")
         return
 
     # `FolderMemoryStore.append()` mutates on-disk files; serialize appends
     # across concurrent chat runs to avoid corrupting `order.jsonl`.
     async with append_lock:
         await to_thread.run_sync(lambda: memory_store.append(mem))
-    inflight.output = output
-    inflight.succeeded = True
-    inflight.done.set()
+    if output.strip():
+        prefix = f"[chat_id={chat_id}] " if chat_id is not None else "[chat_id=?] "
+        print(prefix + output)
 
 
 def _prune_pending_updates_by_time_window(
@@ -559,7 +569,7 @@ async def _poll_and_run_forever(
     model = OpenRouterModel(model_name)
     api = TelegramBotApi(token=token)
     try:
-        me = await to_thread.run_sync(api.get_me)
+        me = await api.get_me()
     except TelegramBotApiError as e:
         print(f"[yellow]Telegram getMe failed[/yellow]: {e}")
         me = {}
@@ -575,8 +585,6 @@ async def _poll_and_run_forever(
     backoff_seconds = 1.0
 
     pending_updates_by_id: dict[int, dict[str, Any]] = {}
-    inflight_by_chat_id: dict[int | None, _InFlightChatRun] = {}
-    retry_batches_by_chat_id: dict[int | None, list[dict[str, Any]]] = {}
     append_lock = anyio.Lock()
 
     print(
@@ -597,29 +605,10 @@ async def _poll_and_run_forever(
 
     async with anyio.create_task_group() as tg:
         while True:
-            completed_chat_ids = [
-                cid for cid, run in inflight_by_chat_id.items() if run.done.is_set()
-            ]
-            for cid in completed_chat_ids:
-                run = inflight_by_chat_id.pop(cid)
-                if run.succeeded:
-                    if run.output.strip():
-                        prefix = (
-                            f"[chat_id={cid}] " if cid is not None else "[chat_id=?] "
-                        )
-                        print(prefix + run.output)
-                else:
-                    err = run.error or "unknown error"
-                    prefix = f"[chat_id={cid}] " if cid is not None else "[chat_id=?] "
-                    print(f"[red]agent_run failed[/red]: {prefix}{err}")
-                    retry_batches_by_chat_id[cid] = list(run.batch_updates)
-
             try:
-                updates = await to_thread.run_sync(
-                    lambda offset=next_offset: api.get_updates(
-                        offset=offset,
-                        timeout_seconds=timeout_seconds,
-                    )
+                updates = await api.get_updates(
+                    offset=next_offset,
+                    timeout_seconds=timeout_seconds,
                 )
             except TelegramBotApiError as e:
                 print(f"[red]Telegram poll error[/red]: {e}")
@@ -648,76 +637,52 @@ async def _poll_and_run_forever(
                     last_consumed_update_id = latest_observed_update_id
                     next_offset = last_consumed_update_id + 1
 
-            # Keep polling while agent runs in background, but avoid dispatching
-            # overlapping batches until the current chat-group dispatch finishes.
-            if inflight_by_chat_id:
-                continue
-
-            if not pending_updates_by_id and not retry_batches_by_chat_id:
+            if not pending_updates_by_id:
                 continue
 
             now_unix_seconds = int(time.time())
-            if not retry_batches_by_chat_id:
-                _prune_pending_updates_by_time_window(
-                    pending_updates_by_id,
-                    now_unix_seconds=now_unix_seconds,
-                    window_seconds=time_window_seconds,
-                )
-                if not pending_updates_by_id:
-                    continue
-
-            if retry_batches_by_chat_id:
-                grouped = dict(retry_batches_by_chat_id)
-                if chat_ids is not None:
-                    grouped = {cid: u for cid, u in grouped.items() if cid in chat_ids}
-                retry_batches_by_chat_id.clear()
-            else:
-                pending_updates_in_order = [
-                    pending_updates_by_id[update_id]
-                    for update_id in sorted(pending_updates_by_id)
-                ]
-                batch_updates = filter_updates_in_time_window(
-                    pending_updates_in_order,
-                    now_unix_seconds=now_unix_seconds,
-                    window_seconds=time_window_seconds,
-                )
-                if not batch_updates:
-                    await anyio.sleep(1.0)
-                    continue
-
-                grouped = dispatch_groups_for_batch(
-                    batch_updates,
-                    keyword=keyword,
-                    chat_ids=chat_ids,
-                    bot_user_id=bot_user_id,
-                    bot_username=bot_username,
-                )
-                if not grouped:
-                    await anyio.sleep(0.5)
-                    continue
-
-                # Clear pending only when dispatching a triggered time-window batch.
-                pending_updates_by_id.clear()
-
-            if not grouped:
-                await anyio.sleep(0.5)
+            _prune_pending_updates_by_time_window(
+                pending_updates_by_id,
+                now_unix_seconds=now_unix_seconds,
+                window_seconds=time_window_seconds,
+            )
+            if not pending_updates_by_id:
                 continue
 
+            pending_updates_in_order = [
+                pending_updates_by_id[update_id]
+                for update_id in sorted(pending_updates_by_id)
+            ]
+            batch_updates = filter_updates_in_time_window(
+                pending_updates_in_order,
+                now_unix_seconds=now_unix_seconds,
+                window_seconds=time_window_seconds,
+            )
+            if not batch_updates:
+                continue
+
+            grouped = dispatch_groups_for_batch(
+                batch_updates,
+                keyword=keyword,
+                chat_ids=chat_ids,
+                bot_user_id=bot_user_id,
+                bot_username=bot_username,
+            )
+            if not grouped:
+                continue
+
+            # Clear pending only when dispatching a triggered time-window batch.
+            pending_updates_by_id.clear()
+
             for cid, updates_for_chat in grouped.items():
-                inflight = _InFlightChatRun(
-                    chat_id=cid,
-                    done=anyio.Event(),
-                    batch_updates=list(updates_for_chat),
-                )
-                inflight_by_chat_id[cid] = inflight
                 tg.start_soon(
                     _run_agent_for_chat_batch,
-                    inflight,
+                    cid,
+                    list(updates_for_chat),
                     model,
                     config,
                     mem_store,
                     append_lock,
-                    inflight.batch_updates,
                 )
 
 
