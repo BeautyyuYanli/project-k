@@ -7,7 +7,9 @@ description: Works with the local ~/memories store.
 
 ## What it is
 - `~/memories` is a local memory store
-- **record files** (`~/memories/records/YYYY/MM/DD/HH/<id>.json`) that store one conversation memory each.
+- **record files** (`~/memories/records/YYYY/MM/DD/HH/<id>.core.json`) that store one conversation memory each.
+- **compacted sidecars** (`~/memories/records/YYYY/MM/DD/HH/<id>.compacted.json`) that store only the `compacted` field (JSON array of strings). This keeps the primary record file small and easy to scan.
+- `compacted` is the **working logs** for the corresponding conversation: a chronological list of concise steps extracted from the agent’s tool traces (what was done, why, and the outcome). It is typically **more verbose** than the core record file.
 
 A record is defined as:
 ```
@@ -31,8 +33,13 @@ Combined with `core/file-search` skill for searching.
 
 ### Search by keywords
 ```bash
-# sort in reverse path order to get newest first
-rg -n --sortr path -g "*.json" 'weather|天气|forecast' ~/memories/records | head -n 10
+# sort in path order to get newest first
+rg -n --sort path -g "*.core.json" 'weather|天气|forecast' ~/memories/records | head -n 10
+```
+
+### Search compacted steps (the sidecar files)
+```bash
+rg -n --sort path -g "*.compacted.json" 'ffmpeg|telegram|fish' ~/memories/records | head -n 10
 ```
 
 ### Get memory neighborhood (related records via parents/children) up to N levels
@@ -51,7 +58,7 @@ Sidecar script:
 ```bash
 id='<memory_id>'
 N=3
-~/skills/meta/retrieve-memory/neighborhood.py "$id" --levels "$N"
+~/skills/meta/retrieve-memory/neighborhood.py --id "$id" --levels "$N"
 ```
 
 Notes:

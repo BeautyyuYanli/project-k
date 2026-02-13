@@ -6,8 +6,11 @@ index file.
 Layout (relative to `root`):
 - `order.jsonl`: one JSON object per non-empty line (append order), storing the
   record id, `created_at`, and relative path.
-- `records/YYYY/MM/DD/HH/<id>.json`: one JSON blob per record (pydantic dump),
-  organized by `created_at`.
+- `records/YYYY/MM/DD/HH/<id>.core.json`: one JSON blob per record (pydantic dump,
+  excluding `detailed` and `compacted`), organized by `created_at`.
+- `records/YYYY/MM/DD/HH/<id>.compacted.json`: a sidecar JSON file containing
+  only the record's `compacted` field (a JSON array of strings). Missing sidecars
+  are treated as `compacted=[]` for backward compatibility.
 
 Design notes / invariants:
 - "Latest" means the last id in `order.jsonl` (append order), not necessarily the
@@ -221,6 +224,16 @@ class FolderMemoryStore(MemoryStore):
         self._by_id[record.id_] = record
         self._cache_key = self._stat_key()
 
+    def _compacted_path_for_record_path(self, record_path: Path) -> Path:
+        name = record_path.name
+        if name.endswith(".core.json"):
+            record_id = name[: -len(".core.json")]
+        elif name.endswith(".json") and not name.endswith(".compacted.json"):
+            record_id = name[: -len(".json")]
+        else:
+            raise ValueError(f"Unexpected record filename: {record_path}")
+        return record_path.with_name(f"{record_id}.compacted.json")
+
     def _load_if_needed(self) -> None:
         if not self.root.exists():
             self._cache_key = None
@@ -251,6 +264,23 @@ class FolderMemoryStore(MemoryStore):
         record_paths: dict[str, Path] = {}
         for entry in order_entries:
             record_path = self._resolve_record_path(entry)
+            if not record_path.exists():
+                # Backward compatibility for relpaths written before the
+                # "<id>.core.json" convention.
+                if record_path.name.endswith(".core.json"):
+                    legacy = record_path.with_name(
+                        record_path.name[: -len(".core.json")] + ".json"
+                    )
+                    if legacy.exists():
+                        record_path = legacy
+                elif record_path.name.endswith(
+                    ".json"
+                ) and not record_path.name.endswith(".compacted.json"):
+                    core = record_path.with_name(
+                        record_path.name[: -len(".json")] + ".core.json"
+                    )
+                    if core.exists():
+                        record_path = core
             try:
                 raw = record_path.read_text(encoding=self.encoding)
             except FileNotFoundError as e:
@@ -275,6 +305,26 @@ class FolderMemoryStore(MemoryStore):
                     f"Duplicate MemoryRecord id in order file: {record.id_}"
                 )
 
+            compacted_path = self._compacted_path_for_record_path(record_path)
+            if compacted_path.exists():
+                try:
+                    compacted_raw = compacted_path.read_text(encoding=self.encoding)
+                except OSError as e:
+                    raise ValueError(
+                        f"Failed to read compacted sidecar for id {entry.id_}: {compacted_path}: {e}"
+                    ) from e
+                try:
+                    decoded = json.loads(compacted_raw)
+                except ValueError as e:
+                    raise ValueError(f"Invalid JSON at {compacted_path}: {e}") from e
+                if not isinstance(decoded, list) or any(
+                    not isinstance(item, str) for item in decoded
+                ):
+                    raise ValueError(
+                        f"Invalid compacted sidecar at {compacted_path}: expected JSON array of strings"
+                    )
+                record = record.model_copy(update={"compacted": decoded})
+
             records.append(record)
             by_id[record.id_] = record
             record_paths[record.id_] = record_path
@@ -293,6 +343,16 @@ class FolderMemoryStore(MemoryStore):
 
         indexed: list[tuple[MemoryRecord, str]] = []
         for path in records_dir.rglob("*.json"):
+            if path.name.endswith(".compacted.json"):
+                continue
+            if (
+                path.name.endswith(".json")
+                and not path.name.endswith(".core.json")
+                and (path.with_name(f"{path.stem}.core.json")).exists()
+            ):
+                # If both legacy "<id>.json" and "<id>.core.json" exist, the core
+                # file is authoritative.
+                continue
             try:
                 raw = path.read_text(encoding=self.encoding)
             except OSError as e:
@@ -343,13 +403,10 @@ class FolderMemoryStore(MemoryStore):
             / f"{created_at.month:02d}"
             / f"{created_at.day:02d}"
             / f"{created_at.hour:02d}"
-            / f"{id_}.json"
+            / f"{id_}.core.json"
         )
 
-    def _persist_record(self, record: MemoryRecord) -> Path:
-        path = self._record_paths.get(record.id_)
-        if path is None:
-            path = self._record_path_for(record)
+    def _atomic_write_text(self, path: Path, text: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_dir = path.parent if path.parent.exists() else None
         with tempfile.NamedTemporaryFile(
@@ -361,34 +418,42 @@ class FolderMemoryStore(MemoryStore):
             delete=False,
         ) as tf:
             tmp_path = Path(tf.name)
-            tf.write(
-                record.model_dump_json(exclude={"detailed"})
-            )  # omit detailed  which is hard to read in the plain text file
+            tf.write(text)
         tmp_path.replace(path)
+
+    def _persist_record(self, record: MemoryRecord) -> Path:
+        path = self._record_paths.get(record.id_)
+        if path is None:
+            path = self._record_path_for(record)
+
+        # Omit "detailed" (verbose tool traces) and "compacted" (stored as a sidecar)
+        # to keep the primary record file readable and small.
+        self._atomic_write_text(
+            path,
+            record.model_dump_json(exclude={"detailed", "compacted"}),
+        )
+
+        compacted_path = self._compacted_path_for_record_path(path)
+        self._atomic_write_text(
+            compacted_path,
+            json.dumps(record.compacted, ensure_ascii=False),
+        )
+
         self._record_paths[record.id_] = path
         return path
 
     def _persist_order(self, entries: list[_OrderEntry]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         order_path = self._order_path()
-        tmp_dir = order_path.parent if order_path.parent.exists() else None
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding=self.encoding,
-            dir=tmp_dir,
-            prefix=f".{order_path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as tf:
-            tmp_path = Path(tf.name)
-            for entry in entries:
-                payload = {
-                    "id": str(entry.id_),
-                    "created_at": entry.created_at.isoformat(),
-                    "relpath": entry.relpath,
-                }
-                tf.write(json.dumps(payload) + "\n")
-        tmp_path.replace(order_path)
+        lines: list[str] = []
+        for entry in entries:
+            payload = {
+                "id": str(entry.id_),
+                "created_at": entry.created_at.isoformat(),
+                "relpath": entry.relpath,
+            }
+            lines.append(json.dumps(payload))
+        self._atomic_write_text(order_path, "\n".join(lines) + ("\n" if lines else ""))
 
     def _append_order_line(self, record: MemoryRecord, record_path: Path) -> None:
         self.root.mkdir(parents=True, exist_ok=True)

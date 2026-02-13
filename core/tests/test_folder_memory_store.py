@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 import pytest
@@ -13,6 +14,7 @@ def test_folder_store_get_latest_and_get_by_id(tmp_path) -> None:
     store = FolderMemoryStore(root)
 
     r1 = MemoryRecord(
+        kind="test",
         input="i1",
         compacted=["c1"],
         output="o1",
@@ -21,7 +23,18 @@ def test_folder_store_get_latest_and_get_by_id(tmp_path) -> None:
     )
     store.append(r1)
 
+    r1_path = root / "records" / "2026" / "01" / "01" / "00" / f"{r1.id_}.core.json"
+    assert r1_path.exists()
+    assert (root / "order.jsonl").exists()
+    assert '"compacted"' not in r1_path.read_text(encoding="utf-8")
+    r1_compacted_path = (
+        root / "records" / "2026" / "01" / "01" / "00" / f"{r1.id_}.compacted.json"
+    )
+    assert r1_compacted_path.exists()
+    assert json.loads(r1_compacted_path.read_text(encoding="utf-8")) == ["c1"]
+
     r2 = MemoryRecord(
+        kind="test",
         input="i2",
         compacted=["c2"],
         output="o2",
@@ -30,6 +43,9 @@ def test_folder_store_get_latest_and_get_by_id(tmp_path) -> None:
         parents=[r1.id_],
     )
     store.append(r2)
+
+    # Force a reload from disk so assertions cover the (de)serialization path.
+    store.refresh()
 
     assert store.get_latest() == r2.id_
     assert store.get_by_id(r1.id_) == r1
@@ -44,6 +60,7 @@ def test_folder_store_get_parents_children_and_ancestors(tmp_path) -> None:
     store = FolderMemoryStore(root)
 
     parent = MemoryRecord(
+        kind="test",
         input="i1",
         compacted=["c1"],
         output="o1",
@@ -54,6 +71,7 @@ def test_folder_store_get_parents_children_and_ancestors(tmp_path) -> None:
     store.append(parent)
 
     child = MemoryRecord(
+        kind="test",
         input="i2",
         compacted=["c2"],
         output="o2",
@@ -71,6 +89,7 @@ def test_folder_store_get_parents_children_and_ancestors(tmp_path) -> None:
 
     missing_child_id = "zzzzzzzz"
     missing = MemoryRecord(
+        kind="test",
         input="i3",
         compacted=["c3"],
         output="o3",
@@ -100,6 +119,7 @@ def test_folder_store_get_between(tmp_path) -> None:
     store = FolderMemoryStore(root)
 
     r1 = MemoryRecord(
+        kind="test",
         input="i1",
         compacted=["c1"],
         output="o1",
@@ -107,6 +127,7 @@ def test_folder_store_get_between(tmp_path) -> None:
         created_at=datetime(2026, 1, 1, 0, 0, 0),
     )
     r2 = MemoryRecord(
+        kind="test",
         input="i2",
         compacted=["c2"],
         output="o2",
@@ -114,6 +135,7 @@ def test_folder_store_get_between(tmp_path) -> None:
         created_at=datetime(2026, 1, 1, 12, 0, 0),
     )
     r3 = MemoryRecord(
+        kind="test",
         input="i3",
         compacted=["c3"],
         output="o3",
@@ -141,6 +163,7 @@ def test_folder_store_auto_refreshes_on_external_append(tmp_path) -> None:
     store = FolderMemoryStore(root)
 
     r1 = MemoryRecord(
+        kind="test",
         input="i1",
         compacted=["c1"],
         output="o1",
@@ -152,6 +175,7 @@ def test_folder_store_auto_refreshes_on_external_append(tmp_path) -> None:
 
     external = FolderMemoryStore(root)
     r2 = MemoryRecord(
+        kind="test",
         input="i2",
         compacted=["c2"],
         output="o2",
@@ -161,3 +185,26 @@ def test_folder_store_auto_refreshes_on_external_append(tmp_path) -> None:
     external.append(r2)
 
     assert store.get_latest() == r2.id_
+
+
+def test_folder_store_rebuild_order_ignores_compacted_sidecars(tmp_path) -> None:
+    root = tmp_path / "mem"
+    store = FolderMemoryStore(root)
+
+    r1 = MemoryRecord(
+        kind="test",
+        input="i1",
+        compacted=["c1"],
+        output="o1",
+        detailed=[],
+        created_at=datetime(2026, 1, 1, 0, 0, 0),
+    )
+    store.append(r1)
+
+    # Simulate a missing index file; the store should rebuild the order from
+    # record files without treating *.compacted.json sidecars as records.
+    (root / "order.jsonl").unlink()
+
+    rebuilt = FolderMemoryStore(root)
+    assert rebuilt.get_latest() == r1.id_
+    assert rebuilt.get_by_id(r1.id_) == r1

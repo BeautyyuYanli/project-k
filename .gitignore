@@ -6,5 +6,8 @@ data/fs/*
 data/fs/skills/*
 !data/fs/skills/core/
 !data/fs/skills/meta/
+!data/fs/skills/context/
+!data/fs/skills/messager/
+
 
 *.jsonl

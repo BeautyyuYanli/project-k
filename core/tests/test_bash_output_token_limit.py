@@ -1,6 +1,6 @@
 import tiktoken
 
-from k.agent.init_agent import BashEvent
+from k.agent.core.shell_tools import BashEvent
 
 
 def test_bash_event_does_not_suppress_small_output() -> None:

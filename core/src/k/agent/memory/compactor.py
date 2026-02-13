@@ -1,5 +1,9 @@
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelRequest, ModelResponse
+from pydantic_ai.messages import (
+    BaseToolCallPart,
+    ModelRequest,
+    ModelResponse,
+)
 from pydantic_ai.models import KnownModelName, Model
 
 
@@ -51,9 +55,9 @@ def print_detailed(detailed: list[ModelRequest | ModelResponse]):
     res = ""
     for msg in detailed:
         if isinstance(msg, ModelRequest):
-            res += f"Inbound: {msg.parts!r}\n"
+            res += f"Inbound: {[part.content for part in msg.parts]!r}\n"
         else:
-            res += f"Assistant: {msg.parts!r}\n"
+            res += f"Assistant: {[(part.content if not isinstance(part, (BaseToolCallPart)) else part) for part in msg.parts]!r}\n"
     return res
 
 

@@ -1,0 +1,13 @@
+.git
+.DS_Store
+
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.logfire/
+**/.tg_starter/
+
+core/.venv/
+core/.env
+core/mem*.jsonl
+core/telegram_state.json

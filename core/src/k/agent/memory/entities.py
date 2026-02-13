@@ -95,12 +95,13 @@ def is_memory_record_id(value: str) -> bool:
 
 class MemoryRecord(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
+    kind: str
     id_: str = ""
     parents: list[str] = Field(default_factory=list)
     children: list[str] = Field(default_factory=list)
 
     input: str
-    compacted: list[str]
+    compacted: list[str] = Field(default_factory=list)
     output: str
     detailed: list[ModelRequest | ModelResponse] = Field(default_factory=list)
 

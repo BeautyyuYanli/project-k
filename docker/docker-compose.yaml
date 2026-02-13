@@ -1,17 +1,15 @@
 services:
   basic-os:
     image: ${IMAGE_NAME:-kapybara-basic-os:latest}
-    container_name: ${CONTAINER_NAME:-k-container}
     build:
       context: ..
       dockerfile: docker/basic-os/Dockerfile
     environment:
       PUID: "${PUID:?set PUID (e.g. id -u)}"
       PGID: "${PGID:?set PGID (e.g. id -g)}"
+      K_FS_BASE: "/home/k"
+      K_BASIC_OS_PORT: "22"
+      K_BASIC_OS_ADDR: "localhost"
     volumes:
-      - "${HOST_WORKSPACE:?set HOST_WORKSPACE}:/home/k"
-      - ${KAPYBARA_RO:-../fs_base/.kapybara}:/home/k/.kapybara:ro
-    ports:
-      - "${SSH_HOST_PORT:-2222}:22"
-
-
+      - ../data/fs:/home/k
+      - ../core:/core

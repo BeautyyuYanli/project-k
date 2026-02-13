@@ -9,6 +9,7 @@ export GIT_PAGER=cat
 export LC_ALL=C.UTF-8        # or C, depending on your needs
 export LANG=C.UTF-8
 export TZ=UTC 
+export PATH="$HOME/.local/bin:$PATH"
 stty -echo; 
 set -a; 
 . ~/.env; 
