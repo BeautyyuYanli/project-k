@@ -35,6 +35,7 @@ from k.agent.core.prompts import (
     bash_tool_prompt,
     general_prompt,
     input_event_prompt,
+    intent_instruct_prompt,
     memory_instruct_prompt,
     persona_prompt,
     response_instruct_prompt,
@@ -197,8 +198,9 @@ agent = Agent(
     system_prompt=[
         bash_tool_prompt,
         input_event_prompt,
-        memory_instruct_prompt,
         response_instruct_prompt,
+        memory_instruct_prompt,
+        intent_instruct_prompt,
     ],
     tools=[bash, bash_input, bash_wait, bash_interrupt, edit_file],
     deps_type=MyDeps,
