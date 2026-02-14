@@ -37,7 +37,6 @@ from k.agent.core.prompts import (
     input_event_prompt,
     intent_instruct_prompt,
     memory_instruct_prompt,
-    persona_prompt,
     response_instruct_prompt,
 )
 from k.agent.core.shell_tools import (
@@ -173,7 +172,7 @@ async def fork(
         )
 
 
-def _read_persona_override(fs_base: Path) -> str | None:
+def _read_persona_override(fs_base: Path) -> str:
     """Load an optional persona override from `fs_base/PERSONA.md`.
 
     Returns:
@@ -184,15 +183,16 @@ def _read_persona_override(fs_base: Path) -> str | None:
         treated as "no override" so agent runs don't fail due to configuration.
     """
 
-    persona_path = fs_base / "PERSONA.md"
     try:
-        text = persona_path.read_text(encoding="utf-8").strip()
+        text = (fs_base / "PERSONA.md").read_text(encoding="utf-8").strip()
     except FileNotFoundError:
-        return None
+        try:
+            text = (fs_base / "PERSONA.default.md").read_text(encoding="utf-8").strip()
+        except (FileNotFoundError, OSError):
+            return ""
     except OSError:
-        return None
-    return text or None
-
+        return ""
+    return text or "" 
 
 agent = Agent(
     system_prompt=[
@@ -213,7 +213,7 @@ def persona_prompt_from_fs(ctx: RunContext[MyDeps]) -> str:
     """Return the persona system prompt, preferring `fs_base/PERSONA.md`."""
 
     fs_base = Path(ctx.deps.config.fs_base)
-    return _read_persona_override(fs_base) or persona_prompt
+    return _read_persona_override(fs_base)
 
 
 @agent.system_prompt

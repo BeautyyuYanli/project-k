@@ -80,13 +80,44 @@ if [[ -n "$KW" ]]; then
 else
   : > "$OUT/by_kw.txt"
 fi
+
 # Route A4: Preferences
-PREF_FILE="$HOME/preferences/telegram/by_chat/${CHAT_ID}.md"
-if [[ -f "$PREF_FILE" ]]; then
-  { echo "Preference content in ~/preferences/telegram/by_chat/${CHAT_ID}.md"; cat "$PREF_FILE"; echo "---"; } > "$OUT/preference.txt"
+# Always load global preference, then chat-specific preference
+KIND="telegram"
+GLOBAL_PREF_FILE="$HOME/preferences/$KIND/preferences.md"
+CHAT_PREF_FILE="$HOME/preferences/$KIND/by_chat/${CHAT_ID}.md"
+USER_PREF_FILE="$HOME/preferences/$KIND/by_user/${FROM_ID}.md"
+
+: > "$OUT/all_preferences.txt"
+
+if [[ -f "$GLOBAL_PREF_FILE" ]]; then
+  {
+    echo "Global Preference ($KIND):"
+    cat "$GLOBAL_PREF_FILE"
+    echo "---"
+  } >> "$OUT/all_preferences.txt"
+fi
+
+if [[ -f "$CHAT_PREF_FILE" ]]; then
+  {
+    echo "Chat-specific Preference (chat_id: $CHAT_ID):"
+    cat "$CHAT_PREF_FILE"
+    echo "---"
+  } >> "$OUT/all_preferences.txt"
+fi
+
+if [[ -f "$USER_PREF_FILE" ]]; then
+  {
+    echo "User-specific Preference (from_id: $FROM_ID):"
+    cat "$USER_PREF_FILE"
+    echo "---"
+  } >> "$OUT/all_preferences.txt"
 fi
 
 wait
+
+# Output Combined Results
+cat "$OUT/all_preferences.txt"
 
 cat "$OUT/by_chat.txt" "$OUT/by_user.txt" "$OUT/by_kw.txt" \
   | awk -F: '!seen[$1]++' \

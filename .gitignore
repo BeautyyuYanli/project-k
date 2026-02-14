@@ -3,6 +3,7 @@
 
 data/fs/*
 !data/fs/.bashrc
+!data/fs/PERSONA.default.md
 !data/fs/skills/
 data/fs/skills/*
 !data/fs/skills/core/
