@@ -1,4 +1,5 @@
 *.pyc
+*.jsonl
 
 data/fs/*
 !data/fs/.bashrc
@@ -9,6 +10,3 @@ data/fs/skills/*
 !data/fs/skills/context/
 !data/fs/skills/messager/
 !data/fs/skills/maintain/
-
-
-*.jsonl
