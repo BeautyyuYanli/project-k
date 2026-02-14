@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from pydantic_ai.messages import UserContent
 
 from k.agent.core.agent import agent_run
-from k.agent.core.types import Event
+from k.agent.core.entities import Event
 from k.agent.memory.folder import FolderMemoryStore
 from k.config import Config
 

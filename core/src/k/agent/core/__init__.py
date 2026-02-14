@@ -7,7 +7,7 @@ Public entrypoints:
 """
 
 from k.agent.core.agent import MyDeps, agent, agent_run
-from k.agent.core.types import Event, MemoryHint, finish_action
+from k.agent.core.entities import Event, MemoryHint, finish_action
 
 __all__ = [
     "Event",
