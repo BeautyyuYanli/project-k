@@ -8,6 +8,7 @@ data/fs/skills/*
 !data/fs/skills/meta/
 !data/fs/skills/context/
 !data/fs/skills/messager/
+!data/fs/skills/maintain/
 
 
 *.jsonl
