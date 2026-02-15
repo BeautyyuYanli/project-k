@@ -210,7 +210,7 @@ async def read_media(
                     }
                 )
             except Exception as e:
-                raise ModelRetry(f"Failed to load URL {s.url_or_path}: {e}")
+                raise ModelRetry(f"Failed to load URL {s.url_or_path}: {e}") from e
         else:
             try:
                 content = BinaryContent.from_path(Path(s.url_or_path))
@@ -218,10 +218,7 @@ async def read_media(
                 raise ModelRetry(f"Failed to read file {s.url_or_path}: {e}") from e
 
         results.append(content)
-    try:
-        return results
-    except Exception as e:
-        raise ModelRetry(f"Failed to process media contents: {e}")
+    return results
 
 
 def _read_persona_override(fs_base: Path) -> str:

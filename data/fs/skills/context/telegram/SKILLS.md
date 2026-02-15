@@ -57,6 +57,6 @@ Notes:
 Once you have candidate record paths/IDs:
 - Open a candidate `.core.json` to read metadata + `compacted` (one line).
 - Open the sibling `.detailed.jsonl` to see the raw `input` (line 1), record
-  `output` (line 2), and simplified tool calls (line 3, a JSON array on one line).
+  `output` (line 2), and per-response tool calls (line 3+, one JSON array per line).
   This file can be verbose; prefer reading just the first few lines
   instead of loading the whole file.

@@ -4,8 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from k.agent.core.agent import concat_skills_prompt
-from k.agent.core.run import _extract_input_event_kind
 from k.agent.core.entities import Event
+from k.agent.core.run import _extract_input_event_kind
 from k.config import Config
 
 

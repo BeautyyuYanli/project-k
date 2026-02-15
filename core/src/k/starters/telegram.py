@@ -115,6 +115,7 @@ _REPLY_TO_FROM_USERNAME_PATHS: Final[tuple[tuple[str, ...], ...]] = (
 class TelegramBotApiError(RuntimeError):
     """Raised when Telegram Bot API returns a non-ok response or invalid JSON."""
 
+
 def _expand_chat_id_watchlist(chat_ids: set[int]) -> set[int]:
     """Expand a chat-id watchlist to be resilient to Telegram supergroup IDs.
 
@@ -138,7 +139,6 @@ def _expand_chat_id_watchlist(chat_ids: set[int]) -> set[int]:
         expanded.add(-int(_SUPERGROUP_ID_PREFIX + abs_str))
 
     return expanded
-
 
 
 def telegram_update_to_event(update: dict[str, Any]) -> Event:
@@ -357,7 +357,9 @@ def trigger_flags_for_updates(
             update_mentions_bot(u, bot_username=bot_username) for u in updates
         ),
         "reply": any(
-            update_is_reply_to_bot(u, bot_user_id=bot_user_id, bot_username=bot_username)
+            update_is_reply_to_bot(
+                u, bot_user_id=bot_user_id, bot_username=bot_username
+            )
             for u in updates
         ),
     }

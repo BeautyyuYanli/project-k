@@ -39,7 +39,7 @@ def test_folder_store_get_latest_and_get_by_id(tmp_path) -> None:
     detailed_lines = r1_detailed_path.read_text(encoding="utf-8").splitlines()
     assert json.loads(detailed_lines[0]) == "i1"
     assert json.loads(detailed_lines[1]) == "o1"
-    assert json.loads(detailed_lines[2]) == []
+    assert detailed_lines[2:] == []
 
     assert not (
         root / "records" / "2026" / "01" / "01" / "00" / f"{r1.id_}.compacted.json"
