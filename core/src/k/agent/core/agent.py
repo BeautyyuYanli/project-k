@@ -242,7 +242,7 @@ def _read_persona_override(fs_base: Path) -> str:
             return ""
     except OSError:
         return ""
-    return text or "" 
+    return text or ""
 
 
 agent = Agent(
