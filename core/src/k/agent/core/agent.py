@@ -232,11 +232,6 @@ def general_system_prompt() -> str:
 
 
 @agent.system_prompt
-def sop_system_prompt() -> str:
-    return SOP_prompt
-
-
-@agent.system_prompt
 def concat_skills_prompt(ctx: RunContext[MyDeps]) -> str:
     base_path: str | Path = ctx.deps.config.fs_base
     skills_md = concat_skills_md(base_path)
@@ -251,6 +246,12 @@ def concat_skills_prompt(ctx: RunContext[MyDeps]) -> str:
     if kind_md:
         return f"<BasicSkills>{skills_md}</BasicSkills>\n<KindSkills>{kind_md}\n</KindSkills>"
     return f"<BasicSkills>{skills_md}</BasicSkills>"
+
+
+@agent.system_prompt
+def sop_system_prompt() -> str:
+    return SOP_prompt
+
 
 
 def _strip_history(

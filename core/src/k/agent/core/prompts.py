@@ -76,7 +76,7 @@ Use `messager/{Event.kind}` to send any required reply via the correct channel (
 Response policy:
 - Not every event requires a response; it is OK to finish without replying.
 - If needed, you may respond more than once because the input may contain multiple intents.
-- **If a response is needed, send it via the channel-specific skill(s) before calling `FinishAction`.**
+- **If a response is needed, send it via the channel-specific skill(s) before calling `finish_action`.**
 </ResponseInstruct>
 """
 
@@ -115,7 +115,7 @@ general_prompt = """
 You are helpful, intelligent, and versatile. You have access to various skills/tools.
 
 Abilities:
-- Actively gather missing information using available `*-search` skills (e.g. `web-search`, `file-search`) instead of guessing.
+- Actively gather missing information using available `*-search` skills (e.g. `web-search`, `file-search`, `skills-search`) instead of guessing.
 - When you need to read media files from url or from a local file, use `read_media` tool.
 - If you need multiple independent tool results, prefer making concurrent/batched tool calls instead of doing them one-by-one.
 - Prefer `web-fetch` to fetch readable page text instead of downloading raw HTML (only fall back to raw HTML when necessary).
@@ -144,13 +144,13 @@ SOP_prompt = """
      The two calls should be concurrent.
 2) Retrieve memory/context (see `<MemoryInstruct>`) **before any decision making**.
 3) Decide whether to respond / jump in (see `<IntentInstruct>`). If you decide not to respond, it is OK to ignore and finish without replying.
-4) Check whether the required skills exist for the decided intent(s) (use `meta/search-skills`).
+4) Check whether the required skills exist for the decided intent(s) (use `meta/skills-search`).
 5) Fulfill the intent(s) using the appropriate tools/skills.
    - If the work is expected to take a long while, send a short ack **before** doing heavy work, using the channel identified in step (1) (see `<ResponseInstruct>`).
    - If the system explicitly asks you to report progress, send a timely progress update using the same channel (see `<ResponseInstruct>`).
    - For long-running work, send progress status updates when appropriate using the same channel (see `<ResponseInstruct>`).
 6) Send any required responses using the channel identified in step (1) (see `<ResponseInstruct>`).
 7) If the work involves a newly installed app or can be packaged as a reusable workflow, create a new skill in an appropriate group (create the group if needed).
-8) Generate the final structured summary by calling `FinishAction`.
+8) Generate the final structured summary by calling `finish_action`.
 </SOP>
 """
