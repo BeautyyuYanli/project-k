@@ -19,7 +19,7 @@ Options:
 Output:
   Prints a de-duped, id-sorted list of matches (newest at bottom).
   Each match is returned as:
-    <id>\troutes\t<matched_detailed_line>
+    <id>\troutes\t<core_json>\t<matched_detailed_line>
   - `routes` is a comma-separated list of routes that matched (chat/user/kw)
   - `matched_detailed_line` is only populated when `--kw` is provided (the kw route)
   Also writes intermediate files: by_chat.txt, by_user.txt, by_kw.txt.
@@ -64,7 +64,7 @@ mkdir -p "$OUT"
 
 core_to_detailed_files_for_kind() {
   # Start from core files (which contain metadata like kind) and map to detailed
-  # files (which contain raw input and ModelResponse lines).
+  # files (which contain raw input/output/tool_calls lines).
   rg --null -l --sort path -g '*.core.json' -e "$KIND_RE" "$ROOT" \
     | while IFS= read -r -d '' core; do
         detailed_jsonl="${core%.core.json}.detailed.jsonl"
@@ -95,11 +95,7 @@ emit_record_tsv() {
   local core_json
   core_json="$(cat "$core_path")"
 
-  if [[ -n "$matched_line" ]]; then
-    printf '%s\t%s\t%s\t%s\n' "$id" "$route" "$matched_line"
-  else
-    printf '%s\t%s\t%s\n' "$id" "$route"
-  fi
+  printf '%s\t%s\t%s\t%s\n' "$id" "$route" "$core_json" "$matched_line"
 }
 
 # Route A1: by chat.id (and kind=telegram)
@@ -190,7 +186,7 @@ wait
 cat "$OUT/all_preferences.txt"
 
 # Combined output: 1 line per memory id, with routes merged and kw match preserved when present.
-echo -e "# id\troutes\tmatched_detailed_line"
+echo -e "# id\troutes\tcore_json\tmatched_detailed_line"
 cat "$OUT/by_chat.txt" "$OUT/by_user.txt" "$OUT/by_kw.txt" \
   | awk -F$'\t' '
     BEGIN { OFS = "\t" }

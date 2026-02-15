@@ -46,7 +46,7 @@ Notes:
 - Prints a de-duped, id-sorted candidate list on stdout (1 line per memory id).
 
 Columns (TSV):
-`id`, `routes`, `matched_detailed_line`
+`id`, `routes`, `core_json`, `matched_detailed_line`
 
 Notes:
 - `routes` is a comma-separated list of which routes matched (`chat`, `user`, `kw`).
