@@ -69,7 +69,7 @@ CHAT_ID=123
 FILE_PATH="/path/to/file.txt"
 CAPTION="Here is the file"
 
-~/skills/messager/telegram/send_document.py "$FILE_PATH" --chat-id "$CHAT_ID" --caption "$CAPTION"
+~/skills/messager/telegram/send_document "$FILE_PATH" --chat-id "$CHAT_ID" --caption "$CAPTION"
 ```
 
 ## sendPhoto

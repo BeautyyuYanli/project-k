@@ -15,10 +15,10 @@ Env: `JINA_AI_KEY`.
 ```bash
 # Single URL
 target='https://example.com/page'
-./fetch.py "$target" --out-dir /tmp/my-fetch
+./fetch "$target" --out-dir /tmp/my-fetch
 
 # Multiple URLs (parallel)
-./fetch.py https://url1.com https://url2.com --out-dir /tmp/my-fetches
+./fetch https://url1.com https://url2.com --out-dir /tmp/my-fetches
 ```
 
 You may need to wait longer for this command to complete.
