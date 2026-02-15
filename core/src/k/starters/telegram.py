@@ -10,8 +10,13 @@ keyword-triggered batches of updates to :func:`k.agent.core.agent_run` as an
 Design notes / boundaries:
 - This is a polling (no webhook) starter intended for local/dev usage.
 - The forwarded `content` is a newline-delimited stream where each line is a
-  full Telegram update JSON object. This keeps the payload structured so the
-  agent can infer routing metadata (e.g. `chat.id`) later.
+  compacted Telegram update JSON object. This keeps the payload structured so
+  the agent can infer routing metadata (e.g. `chat.id`) later, while avoiding
+  high-token, low-signal fields (e.g. file sizes, repeated user/chat profile
+  fields).
+  - Invariant: `chat.id` and `from.id` remain present in the familiar nested
+    form (`"chat": {"id": ...}`, `"from": {"id": ...}`) so downstream regex
+    matchers can continue to route by chat/user id.
 - No outbound Telegram send is performed here; this file only consumes updates
   and creates agent memories.
 - The starter tracks the latest consumed `update_id` in-memory only.
@@ -141,30 +146,375 @@ def _expand_chat_id_watchlist(chat_ids: set[int]) -> set[int]:
     return expanded
 
 
-def telegram_update_to_event(update: dict[str, Any]) -> Event:
-    """Convert a Telegram update dict into an agent `Event`."""
+def telegram_update_to_event(update: dict[str, Any], *, compact: bool = True) -> Event:
+    """Convert a Telegram update dict into an agent `Event`.
 
-    # Keep the update as structured JSON text so the agent can later extract
-    # ids/metadata (e.g. `chat.id`, `message.from.id`) for routing responses.
-    body = json.dumps(update, ensure_ascii=False)
+    When `compact=True` (default), the update is compacted before JSON
+    serialization to reduce tokens while keeping routing-critical ids stable
+    for downstream matchers.
+    """
+
+    body = _json_dumps(_compact_telegram_update(update) if compact else update)
     return Event(kind="telegram", content=body)
 
 
-def telegram_updates_to_event(updates: list[dict[str, Any]]) -> Event:
+def telegram_updates_to_event(
+    updates: list[dict[str, Any]], *, compact: bool = True
+) -> Event:
     """Convert multiple Telegram updates into a single agent `Event`.
 
     The returned `Event.content` is a newline-delimited stream of JSON objects
     (one Telegram update per line).
     """
 
-    bodies = [json.dumps(update, ensure_ascii=False) for update in updates]
+    bodies = [
+        _json_dumps(_compact_telegram_update(update) if compact else update)
+        for update in updates
+    ]
     return Event(kind="telegram", content="\n".join(bodies))
 
 
-def telegram_update_to_event_json(update: dict[str, Any]) -> str:
+def telegram_update_to_event_json(
+    update: dict[str, Any], *, compact: bool = True
+) -> str:
     """Convert a Telegram update dict into an agent `Event` JSON string."""
 
-    return telegram_update_to_event(update).model_dump_json()
+    return telegram_update_to_event(update, compact=compact).model_dump_json()
+
+
+def _json_dumps(obj: Any) -> str:
+    """Token-friendly JSON.
+
+    Notes:
+    - Keep `ensure_ascii=False` so non-ASCII text doesn't bloat into `\\uXXXX`.
+    - Minify separators to reduce prompt tokens.
+    - Preserve insertion order (do not sort keys) so nested `"chat": {"id": ...}`
+      / `"from": {"id": ...}` can keep `id` as the first key for downstream
+      regex matchers that assume that layout.
+    """
+
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def _compact_telegram_update(update: dict[str, Any]) -> dict[str, Any]:
+    """Return a compacted Telegram update payload.
+
+    This is intentionally lossy: it drops large/low-signal fields (e.g.
+    full `entities` arrays, media size/dimension metadata) but preserves:
+    - update routing ids (`chat.id`, `from.id`) in the familiar nested form
+    - human-readable message content (`text` / `caption` / `data`)
+    - media `file_id` (for tracking/reuse), while omitting size/dimension noise
+    - minimal context for replies and membership updates
+
+    Important invariant for downstream tooling:
+    - For any included `chat` or `from` object, `id` is emitted as the first key
+      (e.g. `"from": {"id": 42, ...}`), matching the regex style used by
+      `data/fs/skills/context/telegram/stage_a.sh`.
+    """
+
+    out: dict[str, Any] = {}
+    update_id = update.get("update_id")
+    if isinstance(update_id, int):
+        out["update_id"] = update_id
+
+    for key, val in update.items():
+        if key == "update_id":
+            continue
+        if key in {
+            "message",
+            "edited_message",
+            "channel_post",
+            "edited_channel_post",
+            "business_message",
+            "edited_business_message",
+        }:
+            compacted = _compact_message(val)
+        elif key == "callback_query":
+            compacted = _compact_callback_query(val)
+        elif key in {"my_chat_member", "chat_member"}:
+            compacted = _compact_chat_member_update(val)
+        elif key == "chat_join_request":
+            compacted = _compact_chat_join_request(val)
+        else:
+            compacted = _compact_generic(val)
+
+        if compacted is not None:
+            out[key] = compacted
+
+    return out
+
+
+def _compact_user(user: Any) -> dict[str, Any] | None:
+    if not isinstance(user, dict):
+        return None
+    user_id = user.get("id")
+    if not isinstance(user_id, int):
+        return None
+
+    out: dict[str, Any] = {"id": user_id}
+    username = user.get("username")
+    if isinstance(username, str) and username:
+        out["username"] = username
+
+    first = user.get("first_name")
+    last = user.get("last_name")
+    if isinstance(first, str) or isinstance(last, str):
+        first_s = first if isinstance(first, str) else ""
+        last_s = last if isinstance(last, str) else ""
+        name = (first_s + (" " if first_s and last_s else "") + last_s).strip()
+        if name:
+            out["name"] = name
+
+    return out
+
+
+def _compact_chat(chat: Any) -> dict[str, Any] | None:
+    if not isinstance(chat, dict):
+        return None
+    chat_id = chat.get("id")
+    if not isinstance(chat_id, int):
+        return None
+
+    out: dict[str, Any] = {"id": chat_id}
+    chat_type = chat.get("type")
+    if isinstance(chat_type, str) and chat_type:
+        out["type"] = chat_type
+
+    title = chat.get("title")
+    if isinstance(title, str) and title:
+        out["title"] = title
+
+    username = chat.get("username")
+    if isinstance(username, str) and username:
+        out["username"] = username
+
+    first = chat.get("first_name")
+    last = chat.get("last_name")
+    if (not title and not username) and (
+        isinstance(first, str) or isinstance(last, str)
+    ):
+        first_s = first if isinstance(first, str) else ""
+        last_s = last if isinstance(last, str) else ""
+        name = (first_s + (" " if first_s and last_s else "") + last_s).strip()
+        if name:
+            out["name"] = name
+
+    return out
+
+
+def _compact_photo_sizes(photo: Any) -> dict[str, Any] | None:
+    if not isinstance(photo, list) or not photo:
+        return None
+    # Telegram sends multiple sizes; keep the biggest (typically last).
+    last = photo[-1]
+    if not isinstance(last, dict):
+        return None
+    out: dict[str, Any] = {}
+    file_id = last.get("file_id")
+    if isinstance(file_id, str) and file_id:
+        out["file_id"] = file_id
+    file_unique_id = last.get("file_unique_id")
+    if isinstance(file_unique_id, str) and file_unique_id:
+        out["file_unique_id"] = file_unique_id
+    return out or None
+
+
+def _compact_document_like(doc: Any) -> dict[str, Any] | None:
+    if not isinstance(doc, dict):
+        return None
+    out: dict[str, Any] = {}
+    file_id = doc.get("file_id")
+    if isinstance(file_id, str) and file_id:
+        out["file_id"] = file_id
+    file_unique_id = doc.get("file_unique_id")
+    if isinstance(file_unique_id, str) and file_unique_id:
+        out["file_unique_id"] = file_unique_id
+    return out or None
+
+
+def _compact_message(msg: Any) -> dict[str, Any] | None:
+    if not isinstance(msg, dict):
+        return None
+
+    out: dict[str, Any] = {}
+    message_id = msg.get("message_id")
+    if isinstance(message_id, int):
+        out["message_id"] = message_id
+
+    date = msg.get("date")
+    if isinstance(date, int):
+        out["date"] = date
+
+    chat = _compact_chat(msg.get("chat"))
+    if chat is not None:
+        out["chat"] = chat
+
+    sender = _compact_user(msg.get("from"))
+    if sender is not None:
+        out["from"] = sender
+
+    text = msg.get("text")
+    if isinstance(text, str) and text:
+        out["text"] = text
+
+    caption = msg.get("caption")
+    if isinstance(caption, str) and caption:
+        out["caption"] = caption
+
+    # Entities are verbose and primarily describe formatting; drop them to reduce tokens.
+
+    reply_to = msg.get("reply_to_message")
+    if isinstance(reply_to, dict):
+        compact_reply = _compact_message(reply_to)
+        if compact_reply:
+            out["reply_to_message"] = compact_reply
+
+    photo = _compact_photo_sizes(msg.get("photo"))
+    if photo is not None:
+        out["photo"] = photo
+
+    for k in (
+        "document",
+        "video",
+        "audio",
+        "voice",
+        "animation",
+        "sticker",
+        "video_note",
+    ):
+        compacted = _compact_document_like(msg.get(k))
+        if compacted is not None:
+            out[k] = compacted
+
+    location = msg.get("location")
+    if isinstance(location, dict):
+        loc_out: dict[str, Any] = {}
+        lat = location.get("latitude")
+        lon = location.get("longitude")
+        if isinstance(lat, (int, float)):
+            loc_out["latitude"] = lat
+        if isinstance(lon, (int, float)):
+            loc_out["longitude"] = lon
+        if loc_out:
+            out["location"] = loc_out
+
+    return out or None
+
+
+def _compact_callback_query(val: Any) -> dict[str, Any] | None:
+    if not isinstance(val, dict):
+        return None
+
+    out: dict[str, Any] = {}
+    cid = val.get("id")
+    if isinstance(cid, str) and cid:
+        out["id"] = cid
+
+    sender = _compact_user(val.get("from"))
+    if sender is not None:
+        out["from"] = sender
+
+    message = _compact_message(val.get("message"))
+    if message is not None:
+        out["message"] = message
+
+    data = val.get("data")
+    if isinstance(data, str) and data:
+        out["data"] = data
+
+    return out or None
+
+
+def _compact_chat_member_update(val: Any) -> dict[str, Any] | None:
+    if not isinstance(val, dict):
+        return None
+
+    out: dict[str, Any] = {}
+    chat = _compact_chat(val.get("chat"))
+    if chat is not None:
+        out["chat"] = chat
+
+    sender = _compact_user(val.get("from"))
+    if sender is not None:
+        out["from"] = sender
+
+    date = val.get("date")
+    if isinstance(date, int):
+        out["date"] = date
+
+    new_member = val.get("new_chat_member")
+    if isinstance(new_member, dict):
+        nco: dict[str, Any] = {}
+        user = _compact_user(new_member.get("user"))
+        if user is not None:
+            nco["user"] = user
+        status = new_member.get("status")
+        if isinstance(status, str) and status:
+            nco["status"] = status
+        if nco:
+            out["new_chat_member"] = nco
+
+    return out or None
+
+
+def _compact_chat_join_request(val: Any) -> dict[str, Any] | None:
+    if not isinstance(val, dict):
+        return None
+    out: dict[str, Any] = {}
+    chat = _compact_chat(val.get("chat"))
+    if chat is not None:
+        out["chat"] = chat
+    sender = _compact_user(val.get("from"))
+    if sender is not None:
+        out["from"] = sender
+    date = val.get("date")
+    if isinstance(date, int):
+        out["date"] = date
+    bio = val.get("bio")
+    if isinstance(bio, str) and bio:
+        out["bio"] = bio
+    return out or None
+
+
+def _compact_generic(val: Any) -> Any | None:
+    # For unknown update types, keep only a small set of universally useful keys.
+    if isinstance(val, dict):
+        out: dict[str, Any] = {}
+
+        # Keep id/date first for readability.
+        for k in ("id", "date"):
+            v = val.get(k)
+            if isinstance(v, (int, str)):
+                out[k] = v
+
+        chat = _compact_chat(val.get("chat"))
+        if chat is not None:
+            out["chat"] = chat
+
+        sender = _compact_user(val.get("from"))
+        if sender is not None:
+            out["from"] = sender
+
+        text = val.get("text")
+        if isinstance(text, str) and text:
+            out["text"] = text
+        caption = val.get("caption")
+        if isinstance(caption, str) and caption:
+            out["caption"] = caption
+        data = val.get("data")
+        if isinstance(data, str) and data:
+            out["data"] = data
+        query = val.get("query")
+        if isinstance(query, str) and query:
+            out["query"] = query
+
+        return out or None
+
+    # Scalar values are already compact.
+    if isinstance(val, (str, int, float, bool)) or val is None:
+        return val
+
+    return None
 
 
 def extract_update_id(update: dict[str, Any]) -> int | None:

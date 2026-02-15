@@ -20,4 +20,68 @@ def test_telegram_update_to_event_json_roundtrip() -> None:
     assert event["kind"] == "telegram"
 
     body = json.loads(event["content"])
-    assert body == update
+    assert body["update_id"] == 123
+    assert body["message"]["message_id"] == 1
+    assert body["message"]["chat"]["id"] == 99
+    assert body["message"]["from"]["id"] == 42
+    assert body["message"]["text"] == "hello"
+
+    # Compacting merges/drops verbose profile fields.
+    assert "first_name" not in body["message"]["from"]
+    assert "last_name" not in body["message"]["from"]
+
+
+def test_telegram_event_content_keeps_stage_a_chat_and_from_layout() -> None:
+    update = {
+        "update_id": 1,
+        "message": {
+            "message_id": 10,
+            "from": {"id": 555, "first_name": "A", "last_name": "B"},
+            "chat": {"id": -100123, "type": "supergroup", "title": "T"},
+            "date": 1_700_000_000,
+            "text": "hi",
+        },
+    }
+
+    event_json = telegram_update_to_event_json(update)
+
+    # `stage_a.sh` matches on the JSON-escaped payload inside the event JSON.
+    # Keep it simple here: ensure the `chat`/`from` objects still use the
+    # familiar nested shape, with `id` as the first key.
+    assert '\\"chat\\":{\\"id\\":-100123' in event_json
+    assert '\\"from\\":{\\"id\\":555' in event_json
+
+
+def test_telegram_event_keeps_media_file_id_but_drops_size_noise() -> None:
+    update = {
+        "update_id": 9,
+        "message": {
+            "message_id": 99,
+            "from": {"id": 1, "first_name": "A"},
+            "chat": {"id": 2, "type": "private"},
+            "date": 1_700_000_000,
+            "photo": [
+                {"file_id": "small", "file_size": 1, "width": 1, "height": 1},
+                {"file_id": "big", "file_size": 999, "width": 9, "height": 9},
+            ],
+            "document": {
+                "file_id": "doc",
+                "file_size": 123456,
+                "file_name": "x.pdf",
+                "mime_type": "application/pdf",
+            },
+        },
+    }
+
+    event = json.loads(telegram_update_to_event_json(update))
+    body = json.loads(event["content"])
+
+    assert body["message"]["photo"]["file_id"] == "big"
+    assert "file_size" not in body["message"]["photo"]
+    assert "width" not in body["message"]["photo"]
+    assert "height" not in body["message"]["photo"]
+
+    assert body["message"]["document"]["file_id"] == "doc"
+    assert "file_size" not in body["message"]["document"]
+    assert "file_name" not in body["message"]["document"]
+    assert "mime_type" not in body["message"]["document"]
