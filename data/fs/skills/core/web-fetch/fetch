@@ -4,11 +4,12 @@
 # dependencies = ["aiohttp", "tqdm"]
 # ///
 
+from __future__ import annotations
+
 import asyncio
 import os
 import sys
 import argparse
-from typing import List, Dict
 
 async def fetch_url(session: aiohttp.ClientSession, target: str, jina_key: str, use_browser: bool = True) -> str:
     url = f"https://r.jina.ai/{target}"
