@@ -6,23 +6,19 @@ description: Web search via Jina Search Foundation (JSON output).
 ## Upstream dependency
 - Upstream: Jina AI Search Foundation
 - Official docs: https://docs.jina.ai/
-- Skill created: 2026-02-12
 
 # web-search
 
 Env: `JINA_AI_KEY` (required).
 
-## Search (Jina)
-
-- **Language Policy**: Prefer English for searches to get broader/higher-quality results. If results are unsatisfactory, switch to the language most relevant to the query.
+Search results must be dumped to a file in `/tmp` before consumption. Use the provided search script.
 
 ```bash
-q='your query'
-out=/tmp/jina_search_${RANDOM}.json
-curl -sS --get 'https://s.jina.ai/' --data-urlencode "q=${q}" \
-  -H "Authorization: Bearer $JINA_AI_KEY" -H 'Accept: application/json' -o "$out"
-sed -n '1,200p' "$out"
+# Search (saves to random /tmp/jina_search_XXX.json)
+./search "your query"
+
+# Search with custom output path
+./search "your query" --out /tmp/my_search.json
 ```
 
-
-You may need to wait longer for this command to complete.
+Always use these files to consume search results instead of parsing direct stdout if the output is large.

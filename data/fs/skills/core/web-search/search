@@ -1,0 +1,63 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx"]
+# ///
+
+import os
+import sys
+import argparse
+import httpx
+import tempfile
+import uuid
+import json
+
+def main():
+    parser = argparse.ArgumentParser(description="Web search via Jina AI Search")
+    parser.add_argument("query", help="Search query")
+    parser.add_argument("--out", help="Output file (defaults to a random /tmp/jina_search_XXX.json)")
+    args = parser.parse_args()
+
+    jina_key = os.environ.get("JINA_AI_KEY")
+    if not jina_key:
+        print("Error: JINA_AI_KEY environment variable not set.")
+        sys.exit(1)
+
+    if not args.out:
+        base_dir = tempfile.gettempdir()
+        args.out = os.path.join(base_dir, f"jina_search_{uuid.uuid4().hex[:8]}.json")
+
+    headers = {
+        "Authorization": f"Bearer {jina_key}",
+        "Accept": "application/json"
+    }
+    params = {"q": args.query}
+    
+    try:
+        response = httpx.get("https://s.jina.ai/", params=params, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        data = response.json()
+        
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        print(f"Results saved to: {args.out}")
+        
+        # Display a truncated summary on stdout
+        if "data" in data and len(data["data"]) > 0:
+            print("-" * 20)
+            for i, result in enumerate(data["data"][:5]):
+                title = result.get("title", "No title")
+                url = result.get("url", "No URL")
+                desc = result.get("description", result.get("content", ""))[:150].replace("\n", " ")
+                print(f"[{i}] {title}\n    {url}\n    {desc}...")
+            print("-" * 20)
+        else:
+            print("No results found.")
+            
+    except Exception as e:
+        print(f"Error during search: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
