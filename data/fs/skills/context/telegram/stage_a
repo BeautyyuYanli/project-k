@@ -6,13 +6,11 @@
 # ]
 # ///
 
-import os
 import subprocess
 import json
 from pathlib import Path
 from typing import Optional, Annotated
 import typer
-from collections import defaultdict
 
 app = typer.Typer(add_completion=False)
 
@@ -36,33 +34,93 @@ def get_detailed_files(root: Path) -> list[Path]:
             detailed_files.append(df)
     return detailed_files
 
-def search_files(files: list[Path], pattern: str, n: int) -> list[tuple[Path, str]]:
-    """Search for pattern in files and return last N matches."""
+LineMatch = tuple[int, str]
+FileMatches = list[tuple[Path, list[LineMatch]]]
+
+def _parse_rg_lines_with_numbers(output: str) -> list[tuple[Path, int, str]]:
+    """Parse ripgrep output lines in `path:line:match` form."""
+    parsed: list[tuple[Path, int, str]] = []
+    for raw in output.splitlines():
+        if not raw:
+            continue
+        parts = raw.split(":", 2)
+        if len(parts) != 3:
+            continue
+        path_s, line_s, text = parts
+        try:
+            line_no = int(line_s)
+        except ValueError:
+            continue
+        parsed.append((Path(path_s), line_no, text))
+    return parsed
+
+def search_files_first_match_per_file(files: list[Path], pattern: str, n: int) -> FileMatches:
+    """Search files for `pattern`, keeping the last N files (sorted by path).
+
+    For each returned file, only the first match (line number + line) is kept.
+    """
     if not files:
         return []
     
     file_args = [str(f) for f in files]
-    try:
-        # Using xargs style logic if too many files, but for now just pass them
-        res = subprocess.run(
-            ["rg", "--max-count", "1", "--with-filename", "--no-line-number", pattern] + file_args,
-            capture_output=True, text=True
-        )
-        lines = res.stdout.strip().split('\n')
-        matches = []
-        for line in lines:
-            if not line: continue
-            # rg output is path:match
-            parts = line.split(':', 1)
-            if len(parts) == 2:
-                matches.append((Path(parts[0]), parts[1]))
-            else:
-                matches.append((Path(parts[0]), ""))
-        
-        matches.sort(key=lambda x: x[0])
-        return matches[-n:]
-    except subprocess.CalledProcessError:
+    res = subprocess.run(
+        [
+            "rg",
+            "--max-count",
+            "1",
+            "--with-filename",
+            "--line-number",
+            "--no-heading",
+            pattern,
+        ]
+        + file_args,
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode not in (0, 1):  # 1 = no matches, 2 = rg error
         return []
+    grouped: dict[Path, list[LineMatch]] = {}
+    for path, line_no, text in _parse_rg_lines_with_numbers(res.stdout):
+        grouped[path] = [(line_no, text)]
+
+    selected = sorted(grouped.items(), key=lambda x: x[0])[-n:]
+    return selected
+
+def search_files_all_matches_grouped(files: list[Path], pattern: str, n: int) -> FileMatches:
+    """Search files for `pattern`, keeping the last N files (sorted by path).
+
+    For each returned file, up to the last N matched lines are kept (so the kw
+    route can report multiple matches within the same memory record).
+    """
+    if not files:
+        return []
+
+    file_args = [str(f) for f in files]
+    res = subprocess.run(
+        ["rg", "--with-filename", "--line-number", "--no-heading", pattern] + file_args,
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode not in (0, 1):  # 1 = no matches, 2 = rg error
+        return []
+    grouped: dict[Path, list[LineMatch]] = {}
+    for path, line_no, text in _parse_rg_lines_with_numbers(res.stdout):
+        grouped.setdefault(path, []).append((line_no, text))
+
+    selected_paths = sorted(grouped.keys())[-n:]
+    selected: FileMatches = []
+    for path in selected_paths:
+        selected.append((path, grouped[path][-n:]))
+    return selected
+
+def write_route_file(out_path: Path, matches: FileMatches) -> None:
+    """Write a TSV of detailed-path -> match line numbers and lines."""
+    lines = ["# detailed_path\tline_number\tmatched_line"]
+    for path, line_matches in matches:
+        for line_no, line in line_matches:
+            safe_line = line.replace("\t", "\\t")
+            lines.append(f"{path}\t{line_no}\t{safe_line}")
+    out_path.write_text("\n".join(lines) + "\n")
 
 @app.command()
 def main(
@@ -70,7 +128,7 @@ def main(
     from_id: Annotated[Optional[str], typer.Option(help="Sender id (defaults to chat-id)")] = None,
     kw: Annotated[Optional[str], typer.Option(help="Regex for extra narrowing")] = None,
     root: Annotated[Path, typer.Option(help="Memories root")] = Path.home() / "memories/records",
-    n: Annotated[int, typer.Option(help="Lines kept per route")] = 7,
+    n: Annotated[int, typer.Option(help="Lines kept per route")] = 6,
     out_dir: Annotated[Path, typer.Option(help="Output dir")] = Path("/tmp/tg_ctx"),
 ):
     if from_id is None:
@@ -84,8 +142,8 @@ def main(
     chat_re = rf'\\"chat\\"\s*:\s*\{{\s*\\"id\\"\s*:\s*{chat_id}'
     from_re = rf'\\"from\\"\s*:\s*\{{\s*\\"id\\"\s*:\s*{from_id}'
     
-    matches_chat = search_files(detailed_files, chat_re, n)
-    matches_user = search_files(detailed_files, from_re, n)
+    matches_chat = search_files_first_match_per_file(detailed_files, chat_re, n)
+    matches_user = search_files_first_match_per_file(detailed_files, from_re, n)
     
     matches_kw = []
     if kw:
@@ -95,11 +153,24 @@ def main(
                 ["rg", "-l", "--sort", "path", chat_re] + [str(f) for f in detailed_files],
                 capture_output=True, text=True
             )
+            if res.returncode not in (0, 1):  # 1 = no matches, 2 = rg error
+                raise RuntimeError(f"rg failed for chat filter: rc={res.returncode}")
             all_chat_files = [Path(p) for p in res.stdout.strip().split('\n') if p]
             if all_chat_files:
-                matches_kw = search_files(all_chat_files, kw, n)
+                matches_kw = search_files_all_matches_grouped(all_chat_files, kw, n)
         except Exception:
             pass
+
+    # Intermediate route outputs: useful for debugging which route(s) produced
+    # which candidates, and for quickly opening the matching detailed.jsonl line.
+    write_route_file(out_dir / "by_chat.txt", matches_chat)
+    write_route_file(out_dir / "by_user.txt", matches_user)
+    if kw:
+        write_route_file(out_dir / "by_kw.txt", matches_kw)
+    print(f"# wrote {out_dir / 'by_chat.txt'}")
+    print(f"# wrote {out_dir / 'by_user.txt'}")
+    if kw:
+        print(f"# wrote {out_dir / 'by_kw.txt'}")
 
     # Preferences
     kind = "telegram"
@@ -118,10 +189,10 @@ def main(
         print("\n".join(prefs))
 
     # Collect results
-    results = {} # id -> {routes: set, core_json: str, matched_line: str}
+    results = {} # id -> {routes: set, core_json: str, matched_detailed_lines: list[dict]}
     
-    def add_match(match_list, route_name):
-        for path, line in match_list:
+    def add_match(match_list: FileMatches, route_name: str) -> None:
+        for path, line_matches in match_list:
             # Map detailed.jsonl back to core.json
             core_path = path.parent / (path.name.removesuffix(".detailed.jsonl") + ".core.json")
             if not core_path.exists(): continue
@@ -131,23 +202,29 @@ def main(
                 results[mem_id] = {
                     "routes": {route_name},
                     "core_json": core_path.read_text().strip(),
-                    "matched_line": line
+                    "matched_detailed_lines": []
                 }
             else:
                 results[mem_id]["routes"].add(route_name)
-                if line:
-                    results[mem_id]["matched_line"] = line
+
+            # Only the kw route is treated as a "content match" worth surfacing
+            # in the main TSV output; chat/user routes are just for candidate finding.
+            if route_name == "kw" and line_matches:
+                results[mem_id]["matched_detailed_lines"] = [
+                    {"line": line_no, "text": text} for line_no, text in line_matches
+                ]
 
     add_match(matches_chat, "chat")
     add_match(matches_user, "user")
     add_match(matches_kw, "kw")
     
     # Output TSV
-    print("# id\troutes\tcore_json\tmatched_detailed_line")
+    print("# id\troutes\tcore_json\tmatched_detailed_lines")
     for mem_id in sorted(results.keys()):
         data = results[mem_id]
         routes_str = ",".join(sorted(data["routes"]))
-        print(f"{mem_id}\t{routes_str}\t{data['core_json']}\t{data['matched_line']}")
+        matched = json.dumps(data["matched_detailed_lines"], ensure_ascii=False)
+        print(f"{mem_id}\t{routes_str}\t{data['core_json']}\t{matched}")
 
 if __name__ == "__main__":
     app()

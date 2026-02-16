@@ -23,12 +23,12 @@ The recommended entrypoint is the bundled **Stage A** script, which does a paral
   [--kw <regex>] \
   [--root <dir>] \
   [--n <N>] \
-  [--out <dir>]
+  [--out-dir <dir>]
 ```
 
 Notes:
 - The script forces ripgrep output to **not** include line numbers.
-- `--n` controls how many lines are kept per route (chat / user / kw). Default: `7`.
+- `--n` controls how many lines are kept per route (chat / user / kw). Default: `6`.
 
 ### Example
 
@@ -41,16 +41,20 @@ Notes:
 
 ### Output
 
-- Writes intermediate files into `--out` (default `/tmp/tg_ctx/`):
-  - `by_chat.txt`, `by_user.txt`, `by_kw.txt`
+- Writes intermediate files into `--out-dir` (default `/tmp/tg_ctx/`):
+  - `by_chat.txt`, `by_user.txt`
+  - `by_kw.txt` (only when `--kw` is provided)
 - Prints a de-duped, id-sorted candidate list on stdout (1 line per memory id).
 
+Intermediate file columns (TSV):
+`detailed_path`, `line_number`, `matched_line`
+
 Columns (TSV):
-`id`, `routes`, `core_json`, `matched_detailed_line`
+`id`, `routes`, `core_json`, `matched_detailed_lines`
 
 Notes:
 - `routes` is a comma-separated list of which routes matched (`chat`, `user`, `kw`).
-- `matched_detailed_line` is only present when `--kw` is provided (the `kw` route).
+- `matched_detailed_lines` is a JSON array of `{line, text}` objects; it is only non-empty when `--kw` is provided.
 
 ## Follow-ups (manual)
 
