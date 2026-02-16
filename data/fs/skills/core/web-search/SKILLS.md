@@ -11,14 +11,12 @@ description: Web search via Jina Search Foundation (JSON output).
 
 Env: `JINA_AI_KEY` (required).
 
-Search results must be dumped to a file in `/tmp` before consumption. Use the provided search script.
+`--out` is required and must point to a unique file path.
+The script refuses to overwrite an existing path so concurrent runs do not race.
 
 ```bash
-# Search (saves to random /tmp/jina_search_XXX.json)
-~/skills/core/web-search/search "your query"
-
-# Search with custom output path
-~/skills/core/web-search/search "your query" --out /tmp/my_search.json
+# Search
+~/skills/core/web-search/search "your query" --out /tmp/jina_search_01.json
 ```
 
-Always use these files to consume search results instead of parsing direct stdout if the output is large.
+The output file content is exactly the same as stdout. Always read the output file when stdout may be truncated by tooling.

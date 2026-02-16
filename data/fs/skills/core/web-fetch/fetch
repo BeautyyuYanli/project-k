@@ -4,14 +4,25 @@
 # dependencies = ["aiohttp", "tqdm"]
 # ///
 
+"""Fetch URLs via Jina Reader and mirror stdout to a required output file.
+
+`--out` must be a unique path. The script refuses to overwrite existing files to
+avoid races across concurrent tool invocations.
+"""
+
 from __future__ import annotations
 
 import asyncio
 import os
 import sys
 import argparse
-import tempfile
-import uuid
+
+
+def _write_stdout_and_file(output: str, out_path: str) -> None:
+    """Write exactly the same text to a file and stdout."""
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(output)
+    sys.stdout.write(output)
 
 async def fetch_url(session: aiohttp.ClientSession, target: str, jina_key: str, use_browser: bool = True) -> str:
     url = f"https://r.jina.ai/{target}"
@@ -36,34 +47,33 @@ async def fetch_url(session: aiohttp.ClientSession, target: str, jina_key: str, 
 async def main():
     parser = argparse.ArgumentParser(description="Fetch one or more URLs via Jina Reader")
     parser.add_argument("urls", nargs="+", help="URLs to fetch")
-    parser.add_argument("--out-dir", help="Output directory (defaults to a random /tmp/web-fetch-XXX)")
+    parser.add_argument(
+        "--out",
+        required=True,
+        help="Output file path (must be unique to avoid races)",
+    )
     args = parser.parse_args()
 
     jina_key = os.environ.get("JINA_AI_KEY")
     if not jina_key:
-        print("Error: JINA_AI_KEY environment variable not set.")
+        print("Error: JINA_AI_KEY environment variable not set.", file=sys.stderr)
         sys.exit(1)
 
-    if not args.out_dir:
-        # Create a unique directory to prevent conflicts
-        base_dir = tempfile.gettempdir()
-        args.out_dir = os.path.join(base_dir, f"web-fetch-{uuid.uuid4().hex[:8]}")
-
-    os.makedirs(args.out_dir, exist_ok=True)
+    if os.path.exists(args.out):
+        print(f"Error: output file already exists: {args.out}", file=sys.stderr)
+        print("Use a unique output file name to avoid race conditions.", file=sys.stderr)
+        sys.exit(1)
 
     async with aiohttp.ClientSession() as session:
         tasks = [fetch_url(session, url, jina_key) for url in args.urls]
         results = await asyncio.gather(*tasks)
 
-        for i, (url, content) in enumerate(zip(args.urls, results)):
-            filename = os.path.join(args.out_dir, f"fetch_{i}.txt")
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(f"URL: {url}\n\n{content}")
-            
-            # Print filename for machine consumption and a truncated snippet for humans/stdout
-            print(f"[{i}] {url} -> {filename}")
-            snippet = content[:300].replace("\n", " ").strip()
-            print(f"    Snippet: {snippet}...")
+    blocks = []
+    for i, (url, content) in enumerate(zip(args.urls, results)):
+        blocks.append(f"[{i}] URL: {url}\n{content}")
+    output = "\n\n".join(blocks)
+
+    _write_stdout_and_file(output, args.out)
 
 if __name__ == "__main__":
     import aiohttp
