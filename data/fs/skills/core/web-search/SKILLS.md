@@ -15,10 +15,10 @@ Search results must be dumped to a file in `/tmp` before consumption. Use the pr
 
 ```bash
 # Search (saves to random /tmp/jina_search_XXX.json)
-./search "your query"
+~/skills/core/web-search/search "your query"
 
 # Search with custom output path
-./search "your query" --out /tmp/my_search.json
+~/skills/core/web-search/search "your query" --out /tmp/my_search.json
 ```
 
 Always use these files to consume search results instead of parsing direct stdout if the output is large.

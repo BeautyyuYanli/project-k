@@ -15,10 +15,10 @@ Fetch results are stored in a temporary directory to prevent race conditions and
 
 ```bash
 # Single URL (saves to random /tmp/web-fetch-XXX/)
-./fetch "https://example.com"
+~/skills/core/web-fetch/fetch "https://example.com"
 
 # Multiple URLs
-./fetch https://url1.com https://url2.com --out-dir /tmp/my-custom-fetch
+~/skills/core/web-fetch/fetch https://url1.com https://url2.com --out-dir /tmp/my-custom-fetch
 ```
 
 The tool will print the path to the saved content. You should read files from that path.
