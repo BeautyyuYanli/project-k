@@ -1,36 +1,55 @@
 ---
 name: execute-code
-description: Runs scripts reproducibly via `uv` PEP 723 scripts (recommended).
+description: Run scripts reproducibly via `uv` PEP 723 scripts. Do not use .py extensions. Always use chmod +x.
 ---
 
 # execute-code
 
+A framework for running reproducible Python scripts using `uv` and PEP 723 inline dependency metadata.
+
 Ref: https://docs.astral.sh/uv/guides/scripts/
 
-## Recommended format: `uv` shebang + PEP 723
-Example: at the very top of `script`
-```py
+## Core Rules
+- **No .py Extensions**: Do not name your scripts with a `.py` suffix. This encourages treating them as standalone executables.
+- **Explicit Executability**: Always run `chmod +x <script>` before execution.
+- **Shebang Usage**: Always use the `uv` shebang at the top of the file.
+
+## Recommended Format
+
+Use the following template at the start of your script:
+
+```python
 #!/usr/bin/env -S uv run --script
 # /// script
-# requires-python = ">=3.12"          # optional
-# dependencies = ["httpx"]
+# requires-python = ">=3.12"
+# dependencies = [
+#     "httpx",
+# ]
 # ///
 ```
 
-Create/update the inline dependency block:
+### Managing Dependencies
+To add or update dependencies in an existing script:
 ```bash
-uv add --script script 'httpx'
+uv add --script <script_name> 'package-name'
 ```
 
-## Run
-```bash
-chmod +x script
-./script
-```
+## Execution Flow
 
-## Heredoc example (quick one-off script)
+1. **Create/Edit**: Write the script content.
+2. **Make Executable**:
+   ```bash
+   chmod +x <script_name>
+   ```
+3. **Run**:
+   ```bash
+   ./<script_name>
+   ```
+
+## Example: One-off Script (Heredoc)
+
 ```bash
-cat > /tmp/script <<'PY'
+cat > /tmp/fetch_example <<'PY'
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.12"
@@ -40,10 +59,13 @@ cat > /tmp/script <<'PY'
 import httpx
 print(httpx.get("https://example.com").status_code)
 PY
-chmod +x /tmp/script
-/tmp/script
+chmod +x /tmp/fetch_example
+/tmp/fetch_example
 ```
 
 ## Python Coding Style
 
-- Always use modern typed (async) python, in latest typing style, e.g. `list[int]` instead of `List[int]`. Use `dataclass(slots=True)` for simple data containers and `pydantic.BaseModel` for data containers that require validation or serialization. Use httpx for HTTP requests. Define fields of classes using type annotations before other methods.
+- **Typing**: Use modern Python typing (e.g., `list[int]` instead of `List[int]`).
+- **Data Containers**: Use `dataclass(slots=True)` for simple containers or `pydantic.BaseModel` for validation/serialization.
+- **Networking**: Prefer `httpx` for HTTP requests.
+- **Class Structure**: Define fields using type annotations before methods.
