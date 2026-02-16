@@ -11,14 +11,15 @@ description: Fetch one or more URLs via Jina AI Reader.
 
 Env: `JINA_AI_KEY`.
 
-Fetch results are stored in a temporary directory to prevent race conditions and allow post-processing.
+`--out` is required and must point to a unique file path.
+The script refuses to overwrite an existing path so concurrent runs do not race.
 
 ```bash
-# Single URL (saves to random /tmp/web-fetch-XXX/)
-~/skills/core/web-fetch/fetch "https://example.com"
+# Single URL
+~/skills/core/web-fetch/fetch "https://example.com" --out /tmp/web_fetch_example_01.txt
 
 # Multiple URLs
-~/skills/core/web-fetch/fetch https://url1.com https://url2.com --out-dir /tmp/my-custom-fetch
+~/skills/core/web-fetch/fetch https://url1.com https://url2.com --out /tmp/web_fetch_batch_01.txt
 ```
 
-The tool will print the path to the saved content. You should read files from that path.
+The output file content is exactly the same as stdout. Always read the output file when stdout may be truncated by tooling.
