@@ -243,11 +243,7 @@ def _read_persona_override(fs_base: Path) -> str:
 
 agent = Agent(
     system_prompt=[
-        bash_tool_prompt,
-        input_event_prompt,
-        response_instruct_prompt,
-        memory_instruct_prompt,
-        intent_instruct_prompt,
+
     ],
     tools=[
         _tool_model_retry_guard(bash),
@@ -275,6 +271,11 @@ def persona_prompt_from_fs(ctx: RunContext[MyDeps]) -> str:
 def general_system_prompt() -> str:
     return general_prompt
 
+agent.system_prompt(lambda: bash_tool_prompt)
+agent.system_prompt(lambda: input_event_prompt)
+agent.system_prompt(lambda: response_instruct_prompt)
+agent.system_prompt(lambda: memory_instruct_prompt)
+agent.system_prompt(lambda: intent_instruct_prompt)
 
 @agent.system_prompt
 def concat_skills_prompt(ctx: RunContext[MyDeps]) -> str:
