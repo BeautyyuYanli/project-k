@@ -8,6 +8,7 @@ from typing import Any
 import anyio
 import anyio.to_thread as to_thread
 from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.models import Model
 from rich import print
 
 from k.agent.core import agent_run
@@ -80,7 +81,7 @@ def _prune_pending_updates_by_time_window(
 async def _poll_and_run_forever(
     *,
     config: Config,
-    model_name: str,
+    model: Model | str,
     token: str,
     timeout_seconds: int,
     keyword: str,
@@ -99,7 +100,9 @@ async def _poll_and_run_forever(
         raise ValueError(f"time_window_seconds must be >= 0; got {time_window_seconds}")
 
     mem_store = FolderMemoryStore(root=config.fs_base / "memories")
-    model = OpenRouterModel(model_name)
+    if isinstance(model, str):
+        model_name = model
+        model = OpenRouterModel(model_name)
     api = TelegramBotApi(token=token)
     try:
         me = await api.get_me()
@@ -124,7 +127,7 @@ async def _poll_and_run_forever(
         "\n".join(
             [
                 "Telegram starter running (polling getUpdates).",
-                f"- model: {model_name}",
+                f"- model: {model}",
                 f"- timeout_seconds: {timeout_seconds}",
                 f"- last_consumed_update_id: {last_consumed_update_id}",
                 f"- keyword: {keyword!r}",
