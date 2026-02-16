@@ -18,12 +18,23 @@ compact_agent = Agent(
 
 Goal
 ----
-Convert the provided conversation/tool traces into a chronological list of concise, reusable steps.
+Convert the provided conversation/tool traces into a chronological list of concise, reusable steps that preserve high-fidelity operational details.
+
+High-fidelity rule (most important)
+-----------------------------------
+Do **not** over-summarize away the specifics of what the agent:
+- received (inputs/constraints/context),
+- tried (actions, commands, edits, tool calls),
+- observed (tool outputs, errors, test results, confirmations),
+- responded (messages delivered to the user and artifacts produced).
+
+Include failed attempts when they influenced the next step (briefly: what was tried, what went wrong, what changed).
 
 Output format
 -------------
 - Return a list of strings (a JSON array of strings is also acceptable).
 - Do not require any fixed per-line prefix, but each line must be unambiguous about who did what (user intent vs agent action).
+- Prefer dense step-lines that explicitly capture: Received → Tried → Observed → Responded (omit segments that truly don't apply).
 
 What to keep (optimize for reuse)
 --------------------------------
@@ -32,6 +43,7 @@ What to keep (optimize for reuse)
 - Prefer concrete, action-oriented phrasing: what was done, why it mattered, and the outcome.
 - Keep details that help someone repeat the work later:
   - tool/skill names, key flags/options, file paths (e.g. `/tmp/...`), IDs (e.g. chat_id), chosen models/voices, extracted facts/results, and verification signals (e.g. "ok=true", "exit_code=0").
+- Keep user-provided specifics that drive correctness (constraints, examples, acceptance criteria, snippets of inputs/outputs). Quote short fragments when useful; do not paste long payloads.
 - Drop filler that doesn't affect decisions or outcomes (chit-chat, apologies, self-talk, repeated instructions).
 
 Skills (special rule)
@@ -57,7 +69,7 @@ def print_detailed(detailed: list[ModelRequest | ModelResponse]):
         if isinstance(msg, ModelRequest):
             res += f"Inbound: {[part.content for part in msg.parts]!r}\n"
         else:
-            res += f"Assistant: {[(part.content if not isinstance(part, (BaseToolCallPart)) else {"tool_name": part.tool_name, "args": part.args, "tool_call_id": part.tool_call_id}) for part in msg.parts]!r}\n"
+            res += f"Assistant: {[(part.content if not isinstance(part, (BaseToolCallPart)) else {'tool_name': part.tool_name, 'args': part.args, 'tool_call_id': part.tool_call_id}) for part in msg.parts]!r}\n"
     return res
 
 
