@@ -70,7 +70,7 @@ BASE="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}"
 
 curl -sS -X POST "$BASE/sendSticker" \
   -d chat_id="$CHAT_ID" \
-  -d sticker="$FILE_ID"
+  -d sticker="$FILE_ID" | jq
 ```
 
 ## sendDocument
