@@ -10,6 +10,8 @@ import asyncio
 import os
 import sys
 import argparse
+import tempfile
+import uuid
 
 async def fetch_url(session: aiohttp.ClientSession, target: str, jina_key: str, use_browser: bool = True) -> str:
     url = f"https://r.jina.ai/{target}"
@@ -25,7 +27,6 @@ async def fetch_url(session: aiohttp.ClientSession, target: str, jina_key: str, 
             if response.status == 200:
                 return await response.text()
             elif use_browser:
-                # Fallback
                 return await fetch_url(session, target, jina_key, use_browser=False)
             else:
                 return f"Error: {response.status} for {target}"
@@ -35,13 +36,18 @@ async def fetch_url(session: aiohttp.ClientSession, target: str, jina_key: str, 
 async def main():
     parser = argparse.ArgumentParser(description="Fetch one or more URLs via Jina Reader")
     parser.add_argument("urls", nargs="+", help="URLs to fetch")
-    parser.add_argument("--out-dir", default="/tmp/web-fetch", help="Output directory")
+    parser.add_argument("--out-dir", help="Output directory (defaults to a random /tmp/web-fetch-XXX)")
     args = parser.parse_args()
 
     jina_key = os.environ.get("JINA_AI_KEY")
     if not jina_key:
         print("Error: JINA_AI_KEY environment variable not set.")
         sys.exit(1)
+
+    if not args.out_dir:
+        # Create a unique directory to prevent conflicts
+        base_dir = tempfile.gettempdir()
+        args.out_dir = os.path.join(base_dir, f"web-fetch-{uuid.uuid4().hex[:8]}")
 
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -51,11 +57,14 @@ async def main():
 
         for i, (url, content) in enumerate(zip(args.urls, results)):
             filename = os.path.join(args.out_dir, f"fetch_{i}.txt")
-            with open(filename, "w") as f:
+            with open(filename, "w", encoding="utf-8") as f:
                 f.write(f"URL: {url}\n\n{content}")
-            print(f"Saved {url} to {filename} (Preview: {content[:100].replace('\n', ' ')}...)")
+            
+            # Print filename for machine consumption and a truncated snippet for humans/stdout
+            print(f"[{i}] {url} -> {filename}")
+            snippet = content[:300].replace("\n", " ").strip()
+            print(f"    Snippet: {snippet}...")
 
 if __name__ == "__main__":
-    # Fix for aiohttp.ClientSession in newer versions
     import aiohttp
     asyncio.run(main())

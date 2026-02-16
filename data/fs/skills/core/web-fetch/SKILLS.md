@@ -6,19 +6,19 @@ description: Fetch one or more URLs via Jina AI Reader.
 ## Upstream dependency
 - Upstream: Jina AI Reader
 - Official docs: https://jina.ai/
-- Skill created: 2026-02-11
 
 # web-fetch
 
 Env: `JINA_AI_KEY`.
 
-```bash
-# Single URL
-target='https://example.com/page'
-./fetch "$target" --out-dir /tmp/my-fetch
+Fetch results are stored in a temporary directory to prevent race conditions and allow post-processing.
 
-# Multiple URLs (parallel)
-./fetch https://url1.com https://url2.com --out-dir /tmp/my-fetches
+```bash
+# Single URL (saves to random /tmp/web-fetch-XXX/)
+./fetch "https://example.com"
+
+# Multiple URLs
+./fetch https://url1.com https://url2.com --out-dir /tmp/my-custom-fetch
 ```
 
-You may need to wait longer for this command to complete.
+The tool will print the path to the saved content. You should read files from that path.
