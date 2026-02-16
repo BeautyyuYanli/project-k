@@ -44,7 +44,7 @@ Implementation note:
 from __future__ import annotations
 
 from .api import TelegramBotApi, TelegramBotApiError
-from .cli import main
+from .cli import main, run
 from .compact import (
     _expand_chat_id_watchlist,
     chat_group_is_triggered,
@@ -94,6 +94,7 @@ __all__ = [
     "filter_updates_in_time_window",
     "group_updates_by_chat_id",
     "main",
+    "run",
     "telegram_update_to_event",
     "telegram_update_to_event_json",
     "telegram_updates_to_event",
