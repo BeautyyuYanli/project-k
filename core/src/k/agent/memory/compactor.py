@@ -57,7 +57,7 @@ def print_detailed(detailed: list[ModelRequest | ModelResponse]):
         if isinstance(msg, ModelRequest):
             res += f"Inbound: {[part.content for part in msg.parts]!r}\n"
         else:
-            res += f"Assistant: {[(part.content if not isinstance(part, (BaseToolCallPart)) else part) for part in msg.parts]!r}\n"
+            res += f"Assistant: {[(part.content if not isinstance(part, (BaseToolCallPart)) else {"tool_name": part.tool_name, "args": part.args, "tool_call_id": part.tool_call_id}) for part in msg.parts]!r}\n"
     return res
 
 
