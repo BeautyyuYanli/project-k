@@ -26,3 +26,4 @@ jq() {
     command jq -cM "$@"
   fi
 }
+[[ -f ~/.local.bashrc ]] && source ~/.local.bashrc
