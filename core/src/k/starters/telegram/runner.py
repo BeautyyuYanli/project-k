@@ -35,7 +35,7 @@ from .history import (
 )
 
 
-async def _run_agent_for_chat_batch(
+async def run_agent_for_chat_batch(
     chat_id: int | None,
     batch_updates: list[dict[str, Any]],
     model: OpenRouterModel,
@@ -65,7 +65,7 @@ async def _run_agent_for_chat_batch(
         print(prefix + output)
 
 
-def _overlay_dispatch_groups_with_recent(
+def overlay_dispatch_groups_with_recent(
     dispatch_groups: dict[int | None, list[dict[str, Any]]],
     *,
     recent_groups: dict[int | None, list[dict[str, Any]]],
@@ -88,7 +88,7 @@ def _overlay_dispatch_groups_with_recent(
     return selected, replaced
 
 
-def _filter_dispatch_groups_after_last_trigger(
+def filter_dispatch_groups_after_last_trigger(
     dispatch_groups: dict[int | None, list[dict[str, Any]]],
     *,
     last_trigger_update_id_by_chat: dict[int, int],
@@ -130,7 +130,7 @@ def _filter_dispatch_groups_after_last_trigger(
     return filtered, dropped_updates, dropped_groups
 
 
-def _update_last_trigger_update_id_by_chat(
+def update_last_trigger_update_id_by_chat(
     state: dict[int, int],
     *,
     dispatched_groups: dict[int | None, list[dict[str, Any]]],
@@ -364,7 +364,7 @@ async def _poll_and_run_forever(
                     )
                 else:
                     dispatch_groups, replaced_groups = (
-                        _overlay_dispatch_groups_with_recent(
+                        overlay_dispatch_groups_with_recent(
                             grouped,
                             recent_groups=recent_groups,
                         )
@@ -375,7 +375,7 @@ async def _poll_and_run_forever(
             cursor_dropped_updates = 0
             cursor_dropped_groups = 0
             dispatch_groups, cursor_dropped_updates, cursor_dropped_groups = (
-                _filter_dispatch_groups_after_last_trigger(
+                filter_dispatch_groups_after_last_trigger(
                     dispatch_groups,
                     last_trigger_update_id_by_chat=last_trigger_update_id_by_chat,
                 )
@@ -424,7 +424,7 @@ async def _poll_and_run_forever(
             # Clear pending only when dispatching a triggered batch.
             pending_updates_by_id.clear()
 
-            updated_cursor_chats = _update_last_trigger_update_id_by_chat(
+            updated_cursor_chats = update_last_trigger_update_id_by_chat(
                 last_trigger_update_id_by_chat,
                 dispatched_groups=dispatch_groups,
             )
@@ -443,7 +443,7 @@ async def _poll_and_run_forever(
 
             for cid, updates_for_chat in dispatch_groups.items():
                 tg.start_soon(
-                    _run_agent_for_chat_batch,
+                    run_agent_for_chat_batch,
                     cid,
                     list(updates_for_chat),
                     model,
