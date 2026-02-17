@@ -106,12 +106,19 @@ def load_recent_updates_grouped_by_chat_id(
     return {chat_id: list(bucket) for chat_id, bucket in grouped.items()}
 
 
-def trigger_cursor_state_path_for_updates_store(updates_store_path: Path) -> Path:
-    """Return the trigger-cursor state path for a given updates JSONL path."""
+def trigger_cursor_state_path_for_updates_store(
+    updates_store_path: Path | str,
+) -> Path:
+    """Return the trigger-cursor state path for a given updates JSONL path.
 
-    return updates_store_path.with_name(
-        updates_store_path.name + ".trigger_cursor_state.json"
-    )
+    Args:
+        updates_store_path: Path (or string path) to the updates JSONL store.
+            This helper is intentionally lenient because public entrypoints may
+            pass paths as strings.
+    """
+
+    path = Path(updates_store_path)
+    return path.with_name(path.name + ".trigger_cursor_state.json")
 
 
 def load_last_trigger_update_id_by_chat(path: Path) -> dict[int, int]:

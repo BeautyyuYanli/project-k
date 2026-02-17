@@ -10,9 +10,9 @@ from k.starters.telegram import (
     trigger_cursor_state_path_for_updates_store,
 )
 from k.starters.telegram.runner import (
-    _filter_dispatch_groups_after_last_trigger,
-    _overlay_dispatch_groups_with_recent,
-    _update_last_trigger_update_id_by_chat,
+    filter_dispatch_groups_after_last_trigger,
+    overlay_dispatch_groups_with_recent,
+    update_last_trigger_update_id_by_chat,
 )
 
 
@@ -69,7 +69,7 @@ def test_overlay_dispatch_groups_with_recent_keeps_pending_chat_boundary() -> No
         3: [{"update_id": 300, "message": {"chat": {"id": 3}, "text": "recent-c"}}],
     }
 
-    selected, replaced = _overlay_dispatch_groups_with_recent(
+    selected, replaced = overlay_dispatch_groups_with_recent(
         pending,
         recent_groups=recent,
     )
@@ -85,6 +85,11 @@ def test_trigger_cursor_state_path_for_updates_store() -> None:
         Path("/tmp/telegram/updates.jsonl")
     )
     assert str(path).endswith("updates.jsonl.trigger_cursor_state.json")
+
+    path_from_str = trigger_cursor_state_path_for_updates_store(
+        "/tmp/telegram/updates.jsonl"
+    )
+    assert path_from_str == path
 
 
 def test_save_and_load_last_trigger_update_id_by_chat_roundtrip(tmp_path) -> None:
@@ -123,7 +128,7 @@ def test_filter_dispatch_groups_after_last_trigger() -> None:
     }
 
     filtered, dropped_updates, dropped_groups = (
-        _filter_dispatch_groups_after_last_trigger(
+        filter_dispatch_groups_after_last_trigger(
             dispatch_groups,
             last_trigger_update_id_by_chat={1: 10},
         )
@@ -141,7 +146,7 @@ def test_filter_dispatch_groups_after_last_trigger_can_drop_whole_group() -> Non
         1: [{"update_id": 9, "message": {"chat": {"id": 1}}}],
     }
     filtered, dropped_updates, dropped_groups = (
-        _filter_dispatch_groups_after_last_trigger(
+        filter_dispatch_groups_after_last_trigger(
             dispatch_groups,
             last_trigger_update_id_by_chat={1: 10},
         )
@@ -166,7 +171,7 @@ def test_update_last_trigger_update_id_by_chat_advances_max_per_chat() -> None:
         None: [{"update_id": 100}],
     }
 
-    updated_chats = _update_last_trigger_update_id_by_chat(
+    updated_chats = update_last_trigger_update_id_by_chat(
         state,
         dispatched_groups=dispatched,
     )
