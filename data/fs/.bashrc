@@ -1,3 +1,5 @@
+# This .bashrc is the general config and managed by git. 
+# Updates should be placed to .local.bashrc
 export TERM=dumb
 export NO_COLOR=1
 export CLICOLOR=0
@@ -9,7 +11,7 @@ export GIT_PAGER=cat
 export LC_ALL=C.UTF-8        # or C, depending on your needs
 export LANG=C.UTF-8
 export TZ=UTC 
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 stty -echo; 
 set -a; 
 . ~/.env; 
