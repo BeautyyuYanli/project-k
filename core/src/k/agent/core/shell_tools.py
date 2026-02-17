@@ -15,7 +15,12 @@ from typing import Any, Concatenate, Protocol
 
 from pydantic_ai import RunContext
 
-from k.io_helpers.shell import NextResult, ShellSessionInfo, ShellSessionManager
+from k.io_helpers.shell import (
+    NextResult,
+    ShellSessionInfo,
+    ShellSessionManager,
+    ShellSessionOptions,
+)
 from k.runner_helpers.basic_os import BasicOSHelper, single_quote
 
 _BASH_STDIO_TOKEN_LIMIT = 16000
@@ -136,16 +141,36 @@ class BashEvent:
         )
 
 
-async def _bash_impl(ctx: RunContext[ShellToolDeps], text: str) -> BashEvent:
+async def _bash_impl(
+    ctx: RunContext[ShellToolDeps],
+    text: str,
+    *,
+    timeout_seconds: float | None = None,
+) -> BashEvent:
     """
     Start a new bash session with the given commands text.
 
     Args:
         text: The initial commands text to run in the bash session. The commands can be one line or multiple lines.
+        timeout_seconds:
+            Optional per-call timeout override, in seconds, for each `next()`
+            wait in this session. Use this when the command is expected to
+            intentionally block for a while (for example `sleep` or other
+            time-consuming operations).
     """
+
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        raise ValueError(f"timeout_seconds must be > 0; got {timeout_seconds}")
+
+    options = (
+        ShellSessionOptions(timeout_seconds=timeout_seconds)
+        if timeout_seconds is not None
+        else None
+    )
 
     session_id = await ctx.deps.shell_manager.new_shell(
         ctx.deps.basic_os_helper.command(text),
+        options=options,
         desc=text[:30] + ("..." if len(text) > 30 else ""),
     )
     text = text.strip()
@@ -167,8 +192,20 @@ async def _bash_impl(ctx: RunContext[ShellToolDeps], text: str) -> BashEvent:
 
 
 @bash_countdown_tool
-async def bash(ctx: RunContext[ShellToolDeps], text: str) -> BashEvent:
-    return await _bash_impl(ctx, text)
+async def bash(
+    ctx: RunContext[ShellToolDeps], text: str, timeout_seconds: float | None = None
+) -> BashEvent:
+    """Start a new bash session and run initial commands.
+
+    Args:
+        text: Initial command text (single-line or multi-line).
+        timeout_seconds:
+            Optional wait timeout override for this session. This is most useful
+            when the command intentionally waits, such as explicit `sleep` calls
+            or other time-consuming tasks.
+    """
+
+    return await _bash_impl(ctx, text, timeout_seconds=timeout_seconds)
 
 
 @bash_countdown_tool
