@@ -21,9 +21,18 @@ Design notes / boundaries:
   updates and creates agent memories.
 - The starter tracks the latest consumed `update_id` in-memory only.
   - Restarts may reprocess updates that are still pending server-side.
+- When `--updates-store-path` is configured, each accepted update is appended
+  to that JSONL file for durable local history.
+- The starter also persists per-chat trigger cursors (last dispatched
+  `update_id`) next to the updates store.
 - Updates are accumulated in-memory until a trigger condition is met. Once
   triggered, the starter forwards *all pending* updates, grouped by `chat.id`,
   and starts one background :func:`k.agent.core.agent_run` per chat group.
+  - Optional mode: when `--dispatch-recent-per-chat > 0`, each dispatched chat
+    batch is replaced by that chat's latest `N` stored updates from
+    `--updates-store-path` (if available). Defaults preserve historical behavior.
+  - Regardless of source (`pending` or stored recent), dispatch for each chat is
+    constrained to updates newer than that chat's persisted trigger cursor.
   - When `--chat_id` is provided, it is treated as a *trigger watchlist*:
     only updates from those chats can cause a trigger, but when a trigger
     occurs, *all pending* updates (from any chat) are dispatched.
@@ -67,6 +76,13 @@ from .events import (
     telegram_update_to_event_json,
     telegram_updates_to_event,
 )
+from .history import (
+    append_updates_jsonl,
+    load_last_trigger_update_id_by_chat,
+    load_recent_updates_grouped_by_chat_id,
+    save_last_trigger_update_id_by_chat,
+    trigger_cursor_state_path_for_updates_store,
+)
 from .runner import _poll_and_run_forever
 from .tz import (
     _DEFAULT_TIMEZONE,
@@ -84,6 +100,7 @@ __all__ = [
     "_format_unix_seconds",
     "_parse_timezone",
     "_poll_and_run_forever",
+    "append_updates_jsonl",
     "chat_group_is_triggered",
     "dispatch_groups_for_batch",
     "extract_chat_id",
@@ -93,11 +110,15 @@ __all__ = [
     "filter_unseen_updates",
     "filter_updates_in_time_window",
     "group_updates_by_chat_id",
+    "load_last_trigger_update_id_by_chat",
+    "load_recent_updates_grouped_by_chat_id",
     "main",
     "run",
+    "save_last_trigger_update_id_by_chat",
     "telegram_update_to_event",
     "telegram_update_to_event_json",
     "telegram_updates_to_event",
+    "trigger_cursor_state_path_for_updates_store",
     "trigger_flags_for_updates",
     "update_is_private_chat",
     "update_is_reply_to_bot",

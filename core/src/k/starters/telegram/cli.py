@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 import logfire
@@ -44,7 +45,7 @@ def _parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--keyword",
         required=True,
-        help="Trigger substring. When at least one in-window update matches, send the whole in-window batch to the agent.",
+        help="Trigger substring. When at least one pending update matches, send the pending batch to the agent.",
     )
     parser.add_argument(
         "--chat_id",
@@ -52,10 +53,22 @@ def _parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional comma/space separated chat ids. When set, only those chats are processed.",
     )
     parser.add_argument(
-        "--time-window-seconds",
+        "--updates-store-path",
+        default="",
+        help=(
+            "Optional JSONL path to persist accepted Telegram updates "
+            "(one raw update object per line)."
+        ),
+    )
+    parser.add_argument(
+        "--dispatch-recent-per-chat",
         type=int,
-        default=60,
-        help="Only include updates within this age when date is available.",
+        default=0,
+        help=(
+            "When > 0 and --updates-store-path is set, dispatch the latest N stored "
+            "updates per chat instead of the current pending batch. "
+            "Default 0 keeps existing behavior."
+        ),
     )
     parser.add_argument(
         "--timezone",
@@ -74,7 +87,8 @@ async def run(
     chat_id: str = "",
     timezone: str = _DEFAULT_TIMEZONE,
     timeout_seconds: int = 60,
-    time_window_seconds: int = 60,
+    updates_store_path: str = "",
+    dispatch_recent_per_chat: int = 0,
 ) -> None:
     """Function entrypoint.
 
@@ -103,14 +117,22 @@ async def run(
             raise ValueError(f"Invalid chat_id entry in: {raw_chat_ids!r}") from e
         chat_ids = _expand_chat_id_watchlist(chat_ids)
 
+    store_path: Path | None
+    raw_store_path = str(updates_store_path).strip()
+    if raw_store_path:
+        store_path = Path(raw_store_path).expanduser()
+    else:
+        store_path = None
+
     await _poll_and_run_forever(
         config=config,
         model=model,
         token=token,
         timeout_seconds=timeout_seconds,
         keyword=keyword,
-        time_window_seconds=time_window_seconds,
         chat_ids=chat_ids,
+        updates_store_path=store_path,
+        dispatch_recent_per_chat=dispatch_recent_per_chat,
         tz=tz,
     )
 
@@ -125,5 +147,6 @@ async def main() -> None:
         chat_id=args.chat_id,
         timezone=args.timezone,
         timeout_seconds=args.timeout_seconds,
-        time_window_seconds=args.time_window_seconds,
+        updates_store_path=args.updates_store_path,
+        dispatch_recent_per_chat=args.dispatch_recent_per_chat,
     )

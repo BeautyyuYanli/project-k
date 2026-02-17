@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime
+from functools import partial
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -19,12 +21,18 @@ from .api import TelegramBotApi, TelegramBotApiError
 from .compact import (
     dispatch_groups_for_batch,
     extract_chat_id,
-    extract_update_date_unix_seconds,
     extract_update_id,
     filter_unseen_updates,
     trigger_flags_for_updates,
 )
 from .events import telegram_updates_to_event
+from .history import (
+    append_updates_jsonl,
+    load_last_trigger_update_id_by_chat,
+    load_recent_updates_grouped_by_chat_id,
+    save_last_trigger_update_id_by_chat,
+    trigger_cursor_state_path_for_updates_store,
+)
 
 
 async def _run_agent_for_chat_batch(
@@ -51,31 +59,104 @@ async def _run_agent_for_chat_batch(
     # `FolderMemoryStore.append()` mutates on-disk files; serialize appends
     # across concurrent chat runs to avoid corrupting `order.jsonl`.
     async with append_lock:
-        await to_thread.run_sync(lambda: memory_store.append(mem))
+        await to_thread.run_sync(memory_store.append, mem)
     if output.strip():
         prefix = f"[chat_id={chat_id}] " if chat_id is not None else "[chat_id=?] "
         print(prefix + output)
 
 
-def _prune_pending_updates_by_time_window(
-    pending_updates_by_id: dict[int, dict[str, Any]],
+def _overlay_dispatch_groups_with_recent(
+    dispatch_groups: dict[int | None, list[dict[str, Any]]],
     *,
-    now_unix_seconds: int,
-    window_seconds: int,
-) -> None:
-    if window_seconds < 0:
-        raise ValueError(f"window_seconds must be >= 0; got {window_seconds}")
+    recent_groups: dict[int | None, list[dict[str, Any]]],
+) -> tuple[dict[int | None, list[dict[str, Any]]], int]:
+    """Overlay dispatch groups with stored recent updates by chat id.
 
-    to_drop: list[int] = []
-    for update_id, update in pending_updates_by_id.items():
-        date = extract_update_date_unix_seconds(update)
-        if date is None:
+    Only chat ids already present in `dispatch_groups` are considered. This
+    preserves the historical dispatch boundary (no extra chat runs are created).
+    """
+
+    selected: dict[int | None, list[dict[str, Any]]] = {}
+    replaced = 0
+    for chat_id, pending_updates in dispatch_groups.items():
+        recent_updates = recent_groups.get(chat_id)
+        if recent_updates:
+            selected[chat_id] = recent_updates
+            replaced += 1
             continue
-        if now_unix_seconds - date > window_seconds:
-            to_drop.append(update_id)
+        selected[chat_id] = pending_updates
+    return selected, replaced
 
-    for update_id in to_drop:
-        del pending_updates_by_id[update_id]
+
+def _filter_dispatch_groups_after_last_trigger(
+    dispatch_groups: dict[int | None, list[dict[str, Any]]],
+    *,
+    last_trigger_update_id_by_chat: dict[int, int],
+) -> tuple[dict[int | None, list[dict[str, Any]]], int, int]:
+    """Keep only updates strictly newer than each chat's trigger cursor.
+
+    For chats that already have a persisted cursor, updates with missing
+    `update_id` are dropped because their ordering relative to the cursor is
+    unknowable.
+    """
+
+    filtered: dict[int | None, list[dict[str, Any]]] = {}
+    dropped_updates = 0
+    dropped_groups = 0
+
+    for chat_id, updates in dispatch_groups.items():
+        if chat_id is None:
+            filtered[chat_id] = updates
+            continue
+
+        cursor = last_trigger_update_id_by_chat.get(chat_id)
+        if cursor is None:
+            filtered[chat_id] = updates
+            continue
+
+        kept = []
+        for update in updates:
+            update_id = extract_update_id(update)
+            if update_id is None or update_id <= cursor:
+                dropped_updates += 1
+                continue
+            kept.append(update)
+
+        if kept:
+            filtered[chat_id] = kept
+        else:
+            dropped_groups += 1
+
+    return filtered, dropped_updates, dropped_groups
+
+
+def _update_last_trigger_update_id_by_chat(
+    state: dict[int, int],
+    *,
+    dispatched_groups: dict[int | None, list[dict[str, Any]]],
+) -> int:
+    """Advance in-memory trigger cursors from dispatched chat batches."""
+
+    updated_chats = 0
+    for chat_id, updates in dispatched_groups.items():
+        if chat_id is None:
+            continue
+        max_update_id: int | None = None
+        for update in updates:
+            update_id = extract_update_id(update)
+            if update_id is None:
+                continue
+            if max_update_id is None or update_id > max_update_id:
+                max_update_id = update_id
+        if max_update_id is None:
+            continue
+
+        prev = state.get(chat_id)
+        if prev is None or max_update_id > prev:
+            state[chat_id] = max_update_id
+            updated_chats += 1
+
+    return updated_chats
 
 
 async def _poll_and_run_forever(
@@ -85,8 +166,9 @@ async def _poll_and_run_forever(
     token: str,
     timeout_seconds: int,
     keyword: str,
-    time_window_seconds: int,
     chat_ids: set[int] | None,
+    updates_store_path: Path | None = None,
+    dispatch_recent_per_chat: int = 0,
     tz: datetime.tzinfo,
 ) -> None:
     if timeout_seconds <= 0:
@@ -96,8 +178,14 @@ async def _poll_and_run_forever(
             "Refusing to start with an empty --keyword. "
             "Set --keyword to the trigger substring."
         )
-    if time_window_seconds < 0:
-        raise ValueError(f"time_window_seconds must be >= 0; got {time_window_seconds}")
+    if dispatch_recent_per_chat < 0:
+        raise ValueError(
+            f"dispatch_recent_per_chat must be >= 0; got {dispatch_recent_per_chat}"
+        )
+    if dispatch_recent_per_chat > 0 and updates_store_path is None:
+        raise ValueError(
+            "dispatch_recent_per_chat requires updates_store_path to be configured"
+        )
 
     mem_store = FolderMemoryStore(root=config.fs_base / "memories")
     if isinstance(model, str):
@@ -121,6 +209,23 @@ async def _poll_and_run_forever(
 
     pending_updates_by_id: dict[int, dict[str, Any]] = {}
     append_lock = anyio.Lock()
+    last_trigger_update_id_by_chat: dict[int, int] = {}
+    trigger_cursor_state_path: Path | None = None
+    if updates_store_path is not None:
+        trigger_cursor_state_path = trigger_cursor_state_path_for_updates_store(
+            updates_store_path
+        )
+        try:
+            last_trigger_update_id_by_chat = await to_thread.run_sync(
+                load_last_trigger_update_id_by_chat,
+                trigger_cursor_state_path,
+            )
+        except (OSError, ValueError) as e:
+            print(
+                "[yellow]telegram trigger cursor load error[/yellow] "
+                + f"path={trigger_cursor_state_path}: {type(e).__name__}: {e}"
+            )
+            last_trigger_update_id_by_chat = {}
 
     print(
         "\n".join(
@@ -130,8 +235,11 @@ async def _poll_and_run_forever(
                 f"- timeout_seconds: {timeout_seconds}",
                 f"- last_consumed_update_id: {last_consumed_update_id}",
                 f"- keyword: {keyword!r}",
-                f"- time_window_seconds: {time_window_seconds}",
                 f"- chat_ids: {sorted(chat_ids) if chat_ids is not None else None}",
+                f"- updates_store_path: {updates_store_path}",
+                f"- trigger_cursor_state_path: {trigger_cursor_state_path}",
+                f"- loaded_trigger_cursor_chats: {len(last_trigger_update_id_by_chat)}",
+                f"- dispatch_recent_per_chat: {dispatch_recent_per_chat}",
                 f"- timezone: {tz}",
                 f"- bot_user_id: {bot_user_id}",
                 f"- bot_username: {bot_username}",
@@ -178,12 +286,14 @@ async def _poll_and_run_forever(
                 latest_observed_update_id = last_consumed_update_id
                 accepted = 0
                 watched = 0
+                accepted_updates: list[dict[str, Any]] = []
                 for update in unseen_updates:
                     update_id = extract_update_id(update)
                     if update_id is None:
                         continue
 
                     pending_updates_by_id.setdefault(update_id, update)
+                    accepted_updates.append(update)
                     accepted += 1
                     if chat_ids is not None:
                         update_chat_id = extract_chat_id(update)
@@ -197,10 +307,24 @@ async def _poll_and_run_forever(
                 if latest_observed_update_id is not None:
                     last_consumed_update_id = latest_observed_update_id
                     next_offset = last_consumed_update_id + 1
+                persisted = 0
+                if updates_store_path is not None and accepted_updates:
+                    try:
+                        persisted = await to_thread.run_sync(
+                            append_updates_jsonl,
+                            updates_store_path,
+                            list(accepted_updates),
+                        )
+                    except OSError as e:
+                        print(
+                            "[yellow]telegram persist error[/yellow] "
+                            + f"path={updates_store_path}: {type(e).__name__}: {e}"
+                        )
                 if accepted:
                     print(
                         "[cyan]telegram pending[/cyan] "
-                        + f"accepted={accepted} watched={watched if chat_ids is not None else None} pending={len(pending_updates_by_id)}"
+                        + f"accepted={accepted} persisted={persisted if updates_store_path is not None else None} "
+                        + f"watched={watched if chat_ids is not None else None} pending={len(pending_updates_by_id)}"
                     )
 
             if not pending_updates_by_id:
@@ -221,6 +345,44 @@ async def _poll_and_run_forever(
             if not grouped:
                 continue
 
+            dispatch_groups = grouped
+            dispatch_source = "pending"
+            replaced_groups = 0
+            if updates_store_path is not None and dispatch_recent_per_chat > 0:
+                try:
+                    recent_groups = await to_thread.run_sync(
+                        partial(
+                            load_recent_updates_grouped_by_chat_id,
+                            updates_store_path,
+                            per_chat_limit=dispatch_recent_per_chat,
+                        )
+                    )
+                except (OSError, ValueError) as e:
+                    print(
+                        "[yellow]telegram recent load error[/yellow] "
+                        + f"path={updates_store_path}: {type(e).__name__}: {e}"
+                    )
+                else:
+                    dispatch_groups, replaced_groups = (
+                        _overlay_dispatch_groups_with_recent(
+                            grouped,
+                            recent_groups=recent_groups,
+                        )
+                    )
+                    if replaced_groups:
+                        dispatch_source = "stored_recent"
+
+            cursor_dropped_updates = 0
+            cursor_dropped_groups = 0
+            dispatch_groups, cursor_dropped_updates, cursor_dropped_groups = (
+                _filter_dispatch_groups_after_last_trigger(
+                    dispatch_groups,
+                    last_trigger_update_id_by_chat=last_trigger_update_id_by_chat,
+                )
+            )
+            if cursor_dropped_updates:
+                dispatch_source += "+cursor"
+
             flags = trigger_flags_for_updates(
                 pending_updates_in_order,
                 keyword=keyword,
@@ -230,9 +392,23 @@ async def _poll_and_run_forever(
             reasons = ",".join([k for k, v in flags.items() if v]) or "unknown"
             print(
                 "[green]telegram trigger[/green] "
-                + f"pending={len(pending_updates_in_order)} groups={len(grouped)} reasons={reasons}"
+                + f"pending={len(pending_updates_in_order)} groups={len(dispatch_groups)} "
+                + f"source={dispatch_source} replaced_groups={replaced_groups} "
+                + f"cursor_dropped_updates={cursor_dropped_updates} cursor_dropped_groups={cursor_dropped_groups} "
+                + f"reasons={reasons}"
             )
-            for cid, updates_for_chat in grouped.items():
+
+            if not dispatch_groups:
+                print(
+                    "[green]telegram dispatch[/green] "
+                    + "skipped: no updates newer than last trigger cursor"
+                )
+                # Trigger condition already matched, so clear pending to avoid
+                # repeatedly re-evaluating the same pre-cursor updates.
+                pending_updates_by_id.clear()
+                continue
+
+            for cid, updates_for_chat in dispatch_groups.items():
                 ids = [
                     uid
                     for update in updates_for_chat
@@ -248,7 +424,24 @@ async def _poll_and_run_forever(
             # Clear pending only when dispatching a triggered batch.
             pending_updates_by_id.clear()
 
-            for cid, updates_for_chat in grouped.items():
+            updated_cursor_chats = _update_last_trigger_update_id_by_chat(
+                last_trigger_update_id_by_chat,
+                dispatched_groups=dispatch_groups,
+            )
+            if updated_cursor_chats and trigger_cursor_state_path is not None:
+                try:
+                    await to_thread.run_sync(
+                        save_last_trigger_update_id_by_chat,
+                        trigger_cursor_state_path,
+                        dict(last_trigger_update_id_by_chat),
+                    )
+                except (OSError, ValueError) as e:
+                    print(
+                        "[yellow]telegram trigger cursor save error[/yellow] "
+                        + f"path={trigger_cursor_state_path}: {type(e).__name__}: {e}"
+                    )
+
+            for cid, updates_for_chat in dispatch_groups.items():
                 tg.start_soon(
                     _run_agent_for_chat_batch,
                     cid,
