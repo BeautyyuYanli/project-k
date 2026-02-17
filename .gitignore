@@ -1,6 +1,8 @@
 *.pyc
 *.jsonl
 
+data/*
+!data/fs/
 data/fs/*
 !data/fs/.bashrc
 !data/fs/PERSONA.default.md
