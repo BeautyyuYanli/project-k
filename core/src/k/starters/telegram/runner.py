@@ -345,7 +345,23 @@ async def _poll_and_run_forever(
             if not grouped:
                 continue
 
-            dispatch_groups = grouped
+            # If chat_ids is provided, treat it as an exclusive filter for dispatching
+            # to avoid duplicate processing in multi-instance setups.
+            if chat_ids is not None:
+                dispatch_groups = {
+                    cid: updates
+                    for cid, updates in grouped.items()
+                    if cid in chat_ids
+                }
+            else:
+                dispatch_groups = grouped
+
+            if not dispatch_groups:
+                # Trigger condition matched but no updates from watched chats to dispatch.
+                # Clear pending to avoid re-evaluating the same batch.
+                pending_updates_by_id.clear()
+                continue
+
             dispatch_source = "pending"
             replaced_groups = 0
             if updates_store_path is not None and dispatch_recent_per_chat > 0:
