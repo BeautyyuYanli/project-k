@@ -216,7 +216,6 @@ async def test_poll_and_run_forever_requires_keyword(tmp_path) -> None:
             token="test-token",
             timeout_seconds=1,
             keyword=" ",
-            time_window_seconds=60,
             chat_ids=None,
             tz=UTC,
         )
