@@ -54,6 +54,14 @@ def _append_system_msg(existing: str | None, extra: str) -> str:
     return extra
 
 
+def _validate_timeout_seconds(timeout_seconds: float | None) -> float | None:
+    """Return timeout when valid; reject non-positive values."""
+
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        raise ValueError(f"timeout_seconds must be > 0; got {timeout_seconds}")
+    return timeout_seconds
+
+
 class ShellToolDeps(Protocol):
     """Structural deps contract required by the bash-like tools in this module."""
 
@@ -152,15 +160,9 @@ async def _bash_impl(
 
     Args:
         text: The initial commands text to run in the bash session. The commands can be one line or multiple lines.
-        timeout_seconds:
-            Optional per-call timeout override, in seconds, for each `next()`
-            wait in this session. Use this when the command is expected to
-            intentionally block for a while (for example `sleep` or other
-            time-consuming operations).
+        timeout_seconds: Optional wait timeout override for the initial wait.
     """
-
-    if timeout_seconds is not None and timeout_seconds <= 0:
-        raise ValueError(f"timeout_seconds must be > 0; got {timeout_seconds}")
+    timeout_seconds = _validate_timeout_seconds(timeout_seconds)
 
     options = (
         ShellSessionOptions(timeout_seconds=timeout_seconds)
@@ -195,22 +197,22 @@ async def _bash_impl(
 async def bash(
     ctx: RunContext[ShellToolDeps], text: str, timeout_seconds: float | None = None
 ) -> BashEvent:
-    """Start a new bash session and run initial commands.
+    """
+    Start a new bash session and run initial commands.
 
     Args:
         text: Initial command text (single-line or multi-line).
-        timeout_seconds:
-            Optional wait timeout override for this session. This is most useful
-            when the command intentionally waits, such as explicit `sleep` calls
-            or other time-consuming tasks.
+        timeout_seconds: Optional wait timeout override for this session.
     """
-
     return await _bash_impl(ctx, text, timeout_seconds=timeout_seconds)
 
 
 @bash_countdown_tool
 async def bash_input(
-    ctx: RunContext[ShellToolDeps], session_id: str, text: str
+    ctx: RunContext[ShellToolDeps],
+    session_id: str,
+    text: str,
+    timeout_seconds: float | None = None,
 ) -> BashEvent | str:
     """
     Send stdin to a bash session.
@@ -218,10 +220,14 @@ async def bash_input(
     Args:
         session_id: The session id returned by `bash`.
         text: The stdin text to send to the bash session, usually ended with a newline.
+        timeout_seconds: Optional timeout override for this wait.
     """
+    timeout_seconds = _validate_timeout_seconds(timeout_seconds)
 
     try:
-        res = await ctx.deps.shell_manager.next(session_id, stdin=text.encode())
+        res = await ctx.deps.shell_manager.next(
+            session_id, stdin=text.encode(), timeout_seconds=timeout_seconds
+        )
     except KeyError:
         return f"Unknown session id: {session_id}. Start a new session with bash."
     active_sessions = await ctx.deps.shell_manager.list_sessions()
@@ -229,13 +235,24 @@ async def bash_input(
 
 
 @bash_countdown_tool
-async def bash_wait(ctx: RunContext[ShellToolDeps], session_id: str) -> BashEvent | str:
+async def bash_wait(
+    ctx: RunContext[ShellToolDeps],
+    session_id: str,
+    timeout_seconds: float | None = None,
+) -> BashEvent | str:
     """
     Wait for the next output from a bash session.
+
+    Args:
+        session_id: The session id returned by `bash`.
+        timeout_seconds: Optional timeout override for this wait.
     """
+    timeout_seconds = _validate_timeout_seconds(timeout_seconds)
 
     try:
-        res = await ctx.deps.shell_manager.next(session_id)
+        res = await ctx.deps.shell_manager.next(
+            session_id, timeout_seconds=timeout_seconds
+        )
     except KeyError:
         return f"Unknown session id: {session_id}. Start a new session with bash."
     active_sessions = await ctx.deps.shell_manager.list_sessions()

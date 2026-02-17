@@ -13,7 +13,7 @@ You have access to a Linux machine via a bash shell, exposed through these tools
 - `bash_interrupt`: interrupt an existing session
 
 Timeout control:
-- `bash` accepts an optional `timeout_seconds` argument.
+- `bash`, `bash_input`, and `bash_wait` accept optional `timeout_seconds`.
 - Use a custom timeout when you expect an intentional wait (for example explicit `sleep` or other time-consuming commands).
 - If omitted, the default timeout is used.
 
