@@ -46,7 +46,8 @@ def tool_exception_guard[**P, R](
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.info(f"Exception in tool {fn.__name__}: {exc}", exc_info=True)
+            tool_name = getattr(fn, "__name__", type(fn).__name__)
+            logger.info(f"Exception in tool {tool_name}: {exc}", exc_info=True)
             return str(exc)
 
     wrapper.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
