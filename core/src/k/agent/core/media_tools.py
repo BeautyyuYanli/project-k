@@ -122,6 +122,7 @@ async def read_media[DepsT](
 ) -> list[MultiModalContent] | str:
     """
     Read media files from URLs or local file paths.
+    Note: This tool does not support video files. For video content, use the `read-video` skill first.
 
     Args:
         media: A list of URLs and/or local file paths.

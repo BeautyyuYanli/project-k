@@ -1,0 +1,150 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pillow"]
+# ///
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from PIL import Image, ImageDraw, ImageFont
+from pathlib import Path
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="read",
+        description="Extract 1 FPS frames from a video using ffmpeg and print absolute frame paths.",
+    )
+    parser.add_argument("video", help="Path to a video file")
+    args = parser.parse_args()
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        print("error: ffmpeg not found on PATH", file=sys.stderr)
+        return 127
+
+    video_path = Path(args.video).expanduser()
+    if not video_path.exists():
+        print(f"error: file not found: {video_path}", file=sys.stderr)
+        return 2
+
+    video_path = video_path.resolve()
+
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        probe_cmd = [
+            ffprobe,
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "json",
+            os.fspath(video_path),
+        ]
+        try:
+            probe_output = subprocess.check_output(probe_cmd).decode("utf-8")
+            duration = float(json.loads(probe_output)["format"]["duration"])
+            if duration > 2700:
+                print(
+                    f"error: video duration ({duration:.2f}s) exceeds 45 minutes limit",
+                    file=sys.stderr,
+                )
+                return 3
+        except Exception as e:
+            print(f"warning: failed to probe video duration: {e}", file=sys.stderr)
+
+    frames_dir = Path(tempfile.mkdtemp(prefix="read_video_frames_")).resolve()
+    out_pattern = frames_dir / "frame_%06d.jpg"
+
+    cmd = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        os.fspath(video_path),
+        "-vf",
+        "fps=1",
+        os.fspath(out_pattern),
+    ]
+
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        return e.returncode
+
+    frames = sorted(frames_dir.glob("frame_*.jpg"))
+
+    def format_timestamp(seconds: int) -> str:
+        """Format seconds as MM:SS or HH:MM:SS."""
+        h = seconds // 3600
+        m = (seconds % 3600) // 60
+        s = seconds % 60
+        if h > 0:
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        return f"{m:02d}:{s:02d}"
+
+    def add_timestamp(img: Image.Image, seconds: int) -> Image.Image:
+        """Overlay timestamp text with semi-transparent background onto the image."""
+        label = format_timestamp(seconds)
+        w, h = img.size
+        font_size = max(16, h // 18)
+        font: ImageFont.ImageFont | ImageFont.FreeTypeFont
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+        # Measure text using a temporary draw on an RGBA overlay
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        bbox = draw.textbbox((0, 0), label, font=font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+        pad = max(4, font_size // 6)
+        # Bottom-left corner
+        x = pad
+        y = h - text_h - pad * 2
+        # Semi-transparent dark background rect (alpha=120) and semi-transparent white text (alpha=200)
+        draw.rectangle([x - pad, y - pad, x + text_w + pad, y + text_h + pad], fill=(0, 0, 0, 120))
+        draw.text((x, y), label, fill=(255, 255, 255, 200), font=font)
+        # Composite overlay onto the original image
+        base = img.convert("RGBA")
+        result = Image.alpha_composite(base, overlay)
+        return result.convert("RGB")
+
+    # Grid logic: Create a 3x3 grid for every 9 frames; only output grid paths
+    for i in range(0, len(frames), 9):
+        chunk = frames[i : i + 9]
+        if not chunk:
+            continue
+        
+        # Load images and determine size
+        imgs = [Image.open(f).convert("RGB") for f in chunk]
+        if not imgs:
+            continue
+            
+        w, h = imgs[0].size
+        grid_img = Image.new("RGB", (w * 3, h * 3))
+        
+        for idx, (img, frame_path) in enumerate(zip(imgs, chunk)):
+            # frame_000001.jpg -> second 1 (1-based frame index at 1 FPS)
+            frame_num = int(frame_path.stem.split("_")[1])
+            second = frame_num - 1  # 0-based seconds
+            img = add_timestamp(img, second)
+            grid_img.paste(img, ((idx % 3) * w, (idx // 3) * h))
+            
+        grid_path = frames_dir / f"grid_{i//9:03d}.jpg"
+        grid_img.save(grid_path)
+        print(grid_path.resolve())
+
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
