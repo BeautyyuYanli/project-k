@@ -20,7 +20,7 @@ from pathlib import Path
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="read",
-        description="Extract 1 FPS frames from a video using ffmpeg and print absolute frame paths.",
+        description="Extract 1 FPS frames from a video using ffmpeg and print absolute output image paths.",
     )
     parser.add_argument("video", help="Path to a video file")
     args = parser.parse_args()
@@ -117,27 +117,42 @@ def main() -> int:
         result = Image.alpha_composite(base, overlay)
         return result.convert("RGB")
 
-    # Grid logic: Create a 3x3 grid for every 9 frames; only output grid paths
+    # Output logic (chunked by 9 extracted frames):
+    # - chunk size == 1: timestamp the single frame and output its path (no grid)
+    # - 2 <= chunk size <= 4: 2x2 grid
+    # - 5 <= chunk size <= 9: 3x3 grid
     for i in range(0, len(frames), 9):
         chunk = frames[i : i + 9]
         if not chunk:
             continue
-        
-        # Load images and determine size
-        imgs = [Image.open(f).convert("RGB") for f in chunk]
-        if not imgs:
-            continue
-            
-        w, h = imgs[0].size
-        grid_img = Image.new("RGB", (w * 3, h * 3))
-        
-        for idx, (img, frame_path) in enumerate(zip(imgs, chunk)):
-            # frame_000001.jpg -> second 1 (1-based frame index at 1 FPS)
+
+        if len(chunk) == 1:
+            frame_path = chunk[0]
             frame_num = int(frame_path.stem.split("_")[1])
             second = frame_num - 1  # 0-based seconds
+            with Image.open(frame_path) as im:
+                img = im.convert("RGB")
             img = add_timestamp(img, second)
-            grid_img.paste(img, ((idx % 3) * w, (idx // 3) * h))
-            
+            out_path = frames_dir / f"{frame_path.stem}_ts.jpg"
+            img.save(out_path)
+            print(out_path.resolve())
+            continue
+
+        grid_side = 2 if len(chunk) <= 4 else 3
+
+        with Image.open(chunk[0]) as im0:
+            w, h = im0.size
+
+        grid_img = Image.new("RGB", (w * grid_side, h * grid_side))
+
+        for idx, frame_path in enumerate(chunk):
+            frame_num = int(frame_path.stem.split("_")[1])
+            second = frame_num - 1  # 0-based seconds
+            with Image.open(frame_path) as im:
+                img = im.convert("RGB")
+            img = add_timestamp(img, second)
+            grid_img.paste(img, ((idx % grid_side) * w, (idx // grid_side) * h))
+
         grid_path = frames_dir / f"grid_{i//9:03d}.jpg"
         grid_img.save(grid_path)
         print(grid_path.resolve())
