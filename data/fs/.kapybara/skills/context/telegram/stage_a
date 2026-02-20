@@ -242,7 +242,13 @@ def _preference_candidates(
 @app.command()
 def main(
     in_channel: Annotated[
-        str, typer.Option(help="Input channel prefix, e.g. telegram/chat/123")
+        str,
+        typer.Option(
+            help=(
+                "Exact current input in_channel. "
+                "Do not replace with a broader parent prefix."
+            )
+        ),
     ],
     from_id: Annotated[
         Optional[str], typer.Option(help="Sender id (defaults to channel chat id)")
@@ -258,6 +264,12 @@ def main(
         ),
     ] = None,
 ):
+    """Retrieve Telegram memory candidates scoped to the current input channel.
+
+    Callers must pass the exact current-input `in_channel` string. For thread
+    inputs, pass the full thread channel path instead of truncating to
+    `telegram/chat/<chat_id>`.
+    """
     try:
         in_channel = _validate_channel_path("in_channel", in_channel)
     except ValueError as e:
@@ -276,10 +288,15 @@ def main(
         raise typer.Exit(code=2)
 
     out_path = out.expanduser()
+    channel_root = in_channel.split("/", 1)[0]
 
     try:
         with _OutputWriter(out_path=out_path) as w:
             detailed_files = get_detailed_files(root, in_channel_prefix=in_channel)
+            # The user route intentionally searches across the same channel root
+            # (e.g. all `telegram/*` records), not only the current in_channel
+            # subtree. This keeps per-user recall available in thread channels.
+            user_scope_files = get_detailed_files(root, in_channel_prefix=channel_root)
             matches_channel: FileMatches = [
                 (path, []) for path in sorted(detailed_files)[-n:]
             ]
@@ -289,7 +306,7 @@ def main(
                 # Regex matching escaped quotes in detailed.jsonl lines.
                 from_re = rf'\\"from\\"\s*:\s*\{{\s*\\"id\\"\s*:\s*{from_id}'
                 matches_user = search_files_first_match_per_file(
-                    detailed_files, from_re, n
+                    user_scope_files, from_re, n
                 )
 
             matches_kw = []

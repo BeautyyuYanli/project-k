@@ -18,7 +18,7 @@ The `context/<platform>` skill is responsible for retrieving preference files ba
 - **Manual Update**: Users or agents can create or update preference information by directly editing the relevant file.
 
 ### Implementation Guide
-- **Code**: The skill should include a script (e.g., `stage_a`) that searches local memories by `MemoryRecord.in_channel` prefix, then optionally narrows by IDs (e.g., `from.id`).
+- **Code**: The skill should include a script (e.g., `stage_a`) that combines channel-prefix lookup (`MemoryRecord.in_channel`) with optional ID routes (e.g., `from.id`), where ID lookup may span the same platform root (for example, across `telegram/*`).
 - **Key Requirement**:
     - Output a list of candidate memory record paths sorted by time.
     - Prepend loaded preference contents to the output.

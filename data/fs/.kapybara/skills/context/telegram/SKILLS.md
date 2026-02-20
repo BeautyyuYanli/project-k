@@ -12,13 +12,18 @@ The recommended entrypoint is the bundled **Stage A** script, which does a paral
 - `from.id`
 - optional keyword regex (scoped to the same channel prefix)
 
+Hard requirement:
+- `--in-channel` must be the **exact `in_channel` of the current input**.
+- If the current input is on a thread channel, pass the full thread channel path.
+  Do not replace it with a broader parent prefix.
+
 ## Recommended: Stage A script
 
 ### Usage
 
 ```bash
 ~/.kapybara/skills/context/telegram/stage_a \
-  --in-channel <channel_prefix> \
+  --in-channel <exact_current_input_in_channel> \
   [--from-id <from_id>] \
   [--kw <regex>] \
   [--root <dir>] \
@@ -27,11 +32,16 @@ The recommended entrypoint is the bundled **Stage A** script, which does a paral
 ```
 
 Notes:
+- `--in-channel` is not "any matching prefix"; provide the full current-input
+  channel string as-is.
 - The script records ripgrep match line numbers so you can jump to the exact `.detailed.jsonl` line.
 - `--n` controls how many lines are kept per route (channel / user / kw). Default: `6`.
 - Prefix matching is subtree-aware: `telegram/chat/<chat_id>` matches all
   records under that chat, including per-thread channels such as
   `telegram/chat/<chat_id>/thread/<message_thread_id>`.
+- The `user` route is intentionally broader than `channel`: it searches
+  by `from.id` across the same root (`telegram/*`), so thread messages can
+  still recall that user's history outside the current thread.
 
 ### Example
 
