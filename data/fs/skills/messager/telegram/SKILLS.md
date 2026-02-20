@@ -62,6 +62,23 @@ CHAT_ID=123456789
   --title "Page Title"
 ```
 
+
+## createForumTopic (Sub-sessions)
+
+Use this to create a "thread" or "sub-session" in a private chat or forum supergroup.
+**Note**: For private chats, the bot must have "Forum Topic Mode" enabled in @BotFather.
+
+```bash
+CHAT_ID=123456789
+TOPIC_NAME="Work Session"
+
+curl -sS -X POST "$BASE/createForumTopic" \
+  -d chat_id="$CHAT_ID" \
+  -d name="$TOPIC_NAME" | jq
+```
+
+Response includes `message_thread_id`.
+
 ### Send Sticker (via API)
 ```bash
 CHAT_ID=...
