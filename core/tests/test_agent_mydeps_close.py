@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from k.agent.core.agent import MyDeps
+from k.agent.core.entities import Event
 from k.agent.memory.folder import FolderMemoryStore
 from k.config import Config
 
@@ -16,7 +17,7 @@ async def test_mydeps_async_context_closes_cleanly(tmp_path: Path) -> None:
         config=config,
         memory_storage=memory_store,
         memory_parents=[],
-        input_event_in_channel="test",
+        start_event=Event(in_channel="test", content="healthcheck"),
     )
 
     async with deps:

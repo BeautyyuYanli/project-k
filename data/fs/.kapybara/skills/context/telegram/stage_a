@@ -226,7 +226,7 @@ def _preference_candidates(
             )
         )
 
-    # Keep by_user behavior as-is for now.
+    # Keep by_user behavior as-is for Telegram route handling.
     if from_id:
         platform = parts[0]
         paths.append(
@@ -269,6 +269,9 @@ def main(
     Callers must pass the exact current-input `in_channel` string. For thread
     inputs, pass the full thread channel path instead of truncating to
     `telegram/chat/<chat_id>`.
+
+    This script emits retrieval candidates and keeps legacy by-user preference
+    output (`<platform>/by_user/<from_id>.md`) for compatibility.
     """
     try:
         in_channel = _validate_channel_path("in_channel", in_channel)
@@ -343,17 +346,17 @@ def main(
             add_match(matches_user, "user")
             add_match(matches_kw, "kw")
 
-            # Preferences
-            prefs = []
-            for path, title in _preference_candidates(
-                in_channel=in_channel, from_id=from_id
-            ):
-                if path.exists():
-                    prefs.append(f"{title}\n{path.read_text()}\n---")
-
-            if prefs:
-                for block in "\n".join(prefs).splitlines():
-                    w.line(block)
+            # Keep by_user preference output for compatibility while channel
+            # prefix preferences are now injected by agent system prompts.
+            if from_id is not None:
+                for path, title in _preference_candidates(
+                    in_channel=in_channel, from_id=from_id
+                ):
+                    if "by_user" not in path.parts:
+                        continue
+                    if path.exists():
+                        for line in f"{title}\n{path.read_text()}\n---".splitlines():
+                            w.line(line)
 
             # Output TSV
             w.line("# id\troutes\tcore_json\tmatched_detailed_lines")

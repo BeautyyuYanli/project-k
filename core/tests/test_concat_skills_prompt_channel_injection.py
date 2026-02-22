@@ -35,11 +35,15 @@ def test_concat_skills_prompt_injects_channel_root_specific_skills(
     )
 
     config = Config(fs_base=tmp_path)
+    event = Event(
+        in_channel="telegram/chat/1",
+        out_channel="telegram/chat/1/thread/2",
+        content="{}",
+    )
     ctx = SimpleNamespace(
         deps=SimpleNamespace(
             config=config,
-            input_event_in_channel="telegram/chat/1",
-            input_event_out_channel="telegram/chat/1/thread/2",
+            start_event=event,
         )
     )
 
@@ -59,11 +63,15 @@ def test_concat_skills_prompt_skips_channel_skills_when_unknown_roots(
     _write_skill(tmp_path, group="meta", name="retrieve-memory", content="meta skill")
 
     config = Config(fs_base=tmp_path)
+    event = Event(
+        in_channel="nope/chat/1",
+        out_channel="nope/chat/1",
+        content="{}",
+    )
     ctx = SimpleNamespace(
         deps=SimpleNamespace(
             config=config,
-            input_event_in_channel="nope/chat/1",
-            input_event_out_channel="nope/chat/1",
+            start_event=event,
         )
     )
 
