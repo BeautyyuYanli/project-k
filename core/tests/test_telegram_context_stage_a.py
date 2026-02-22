@@ -56,7 +56,7 @@ def _write_record(
 def _run_stage_a(
     *,
     home: Path,
-    records_root: Path,
+    records_root: Path | None,
     in_channel: str,
     from_id: int,
     out_path: Path,
@@ -67,13 +67,13 @@ def _run_stage_a(
         in_channel,
         "--from-id",
         str(from_id),
-        "--root",
-        str(records_root),
         "--n",
         "20",
         "--out",
         str(out_path),
     ]
+    if records_root is not None:
+        cmd.extend(["--root", str(records_root)])
     env = os.environ.copy()
     env["HOME"] = str(home)
     return subprocess.run(
@@ -151,6 +151,36 @@ def test_stage_a_user_route_is_cross_in_channel_for_thread_inputs(
     assert routes["bbb"] == {"user"}
     # In-thread, different user.
     assert routes["ccc"] == {"channel"}
+
+
+def test_stage_a_default_root_uses_home_kapybara_memories_records(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    records_root = home / ".kapybara" / "memories" / "records"
+
+    _write_record(
+        root=records_root,
+        bucket="2026/02/20/00",
+        record_id="aaa",
+        in_channel="telegram/chat/-1001/thread/10",
+        from_id=567113516,
+        update_id=1,
+    )
+
+    out_path = tmp_path / "stage_a.tsv"
+    proc = _run_stage_a(
+        home=home,
+        records_root=None,
+        in_channel="telegram/chat/-1001/thread/10",
+        from_id=567113516,
+        out_path=out_path,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    routes = _parse_routes(out_path.read_text(encoding="utf-8"))
+    assert routes["aaa"] == {"channel", "user"}
 
 
 def test_stage_a_emits_by_user_preference_only(tmp_path: Path) -> None:

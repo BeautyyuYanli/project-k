@@ -5,7 +5,7 @@ description: Optimizes Telegram context/memory retrieval for speed and accuracy 
 
 # context/telegram
 
-This skill is a lightweight, **no-index** workflow for retrieving relevant context from the local `~/memories/records` store when replying on Telegram.
+This skill is a lightweight, **no-index** workflow for retrieving relevant context from the local `~/.kapybara/memories/records` store when replying on Telegram.
 
 The recommended entrypoint is the bundled **Stage A** script, which does a parallel candidate search by:
 - `in_channel` prefix (required)

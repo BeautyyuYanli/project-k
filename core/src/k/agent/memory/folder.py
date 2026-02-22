@@ -22,8 +22,7 @@ Design notes / invariants:
 - Parsing is strict: invalid ids in `order.jsonl`, invalid JSON, or invalid
   `MemoryRecord` data raises `ValueError` with path/line context.
 - `MemoryRecord` loading expects channel fields (`in_channel`, optional
-  `out_channel`). Legacy `kind`-only records are not read directly; migrate them
-  first via `k.agent.memory.folder_migrate_kind_to_channel`.
+  `out_channel`).
 - `append()` updates each referenced parent's `children` list (persisting parent
   records) before persisting the new record.
 - Cache invalidation is keyed off `order.jsonl` mtime/size. If record files are

@@ -28,6 +28,7 @@ from copy import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 from pydantic_ai import (
     Agent,
@@ -69,6 +70,7 @@ from k.agent.core.shell_tools import (
 from k.agent.core.skills_md import concat_skills_md, maybe_load_channel_skill_md
 from k.agent.memory.entities import MemoryRecord, is_memory_record_id
 from k.agent.memory.folder import FolderMemoryStore
+from k.agent.memory.paths import memory_root_from_fs_base
 from k.agent.memory.store import MemoryStore
 from k.config import Config
 from k.io_helpers.shell import ShellSessionManager
@@ -345,20 +347,23 @@ def finish_action(
     )
 
 
-agent: Agent[MyDeps, MemoryRecord] = Agent(
-    system_prompt=[],
-    tools=[
-        bash,
-        bash_input,
-        bash_wait,
-        bash_interrupt,
-        edit_file,
-        read_media,
-        # `fork` is intentionally disabled for now.
-        # fork,
-    ],
-    deps_type=MyDeps,
-    output_type=ToolOutput(finish_action, name="finish_action"),
+agent = cast(
+    Agent[MyDeps, MemoryRecord],
+    Agent(
+        system_prompt=[],
+        tools=[
+            bash,
+            bash_input,
+            bash_wait,
+            bash_interrupt,
+            edit_file,
+            read_media,
+            # `fork` is intentionally disabled for now.
+            # fork,
+        ],
+        deps_type=MyDeps,
+        output_type=ToolOutput(finish_action, name="finish_action"),
+    ),
 )
 
 
@@ -511,7 +516,7 @@ if __name__ == "__main__":
         config = Config(
             fs_base=Path("./data/fs"), basic_os_port=2222, basic_os_addr="localhost"
         )
-        memory_store = FolderMemoryStore(config.fs_base / "memories")
+        memory_store = FolderMemoryStore(memory_root_from_fs_base(config.fs_base))
         instruct = Event(
             in_channel="test",
             content="use `read_media` tool to read image and describe them to ~/image.txt : 1. https://fastly.picsum.photos/id/59/536/354.jpg?hmac=HQ1B2iVRsA2r75Mxt18dSuJa241-Wggf0VF9BxKQhPc \n 2. ./data/fs/961-536x354.jpg",

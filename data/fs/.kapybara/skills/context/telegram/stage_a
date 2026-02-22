@@ -28,11 +28,6 @@ def _record_in_channel(payload: object) -> str | None:
     in_channel = payload.get("in_channel")
     if isinstance(in_channel, str):
         return in_channel
-
-    # Backward compatibility for legacy records.
-    legacy_kind = payload.get("kind")
-    if isinstance(legacy_kind, str):
-        return legacy_kind
     return None
 
 
@@ -58,7 +53,7 @@ def get_detailed_files(root: Path, *, in_channel_prefix: str) -> list[Path]:
 
     root_segment = in_channel_prefix.split("/", 1)[0]
     root_pattern = re.escape(root_segment)
-    grep_pattern = rf'"(?:in_channel|kind)"\s*:\s*"{root_pattern}(?:/|")'
+    grep_pattern = rf'"in_channel"\s*:\s*"{root_pattern}(?:/|")'
 
     try:
         res = subprocess.run(
@@ -254,7 +249,9 @@ def main(
         Optional[str], typer.Option(help="Sender id (defaults to channel chat id)")
     ] = None,
     kw: Annotated[Optional[str], typer.Option(help="Regex for extra narrowing")] = None,
-    root: Annotated[Path, typer.Option(help="Memories root")] = Path.home() / "memories/records",
+    root: Annotated[Path, typer.Option(help="Memories root")] = (
+        Path.home() / ".kapybara" / "memories" / "records"
+    ),
     n: Annotated[int, typer.Option(help="Lines kept per route")] = 6,
     out: Annotated[
         Optional[Path],
