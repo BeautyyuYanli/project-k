@@ -263,7 +263,8 @@ def _load_preferences_prompt(*, in_channel: str) -> str:
 
     if not blocks:
         return ""
-    return "<Preferences>\n" + "\n".join(blocks).rstrip() + "\n</Preferences>"
+    comment = "**The following are your preferences, written in your first person.**"
+    return f"<Preferences>\n{comment}\n" + "\n".join(blocks).rstrip() + "\n</Preferences>"
 
 
 agent = cast(
