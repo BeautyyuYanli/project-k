@@ -5,17 +5,12 @@ This module owns:
 - `agent`: the `pydantic_ai.Agent` wiring (system prompts + tools).
 - `agent_run`: the primary runtime entrypoint (memory selection + compaction).
 
-Persona override:
-    If `Config.fs_base / "PERSONA.md"` exists and is non-empty, its contents are
-    used as the persona system prompt. Otherwise, if
-    `Config.fs_base / "PERSONA.default.md"` exists and is non-empty, its
-    contents are used. If neither file is present (or both are empty), no
-    persona system prompt is added.
-
 Preference injection:
     Channel preferences are injected from `~/.kapybara/preferences` using
-    root-to-leaf `Event.in_channel` prefixes, following `docs/concept/channel.md`:
-    for each prefix, inject `<prefix>.md` then `<prefix>/PREFERENCES.md`.
+    root-to-leaf `Event.in_channel` prefixes, following `docs/concept/channel.md`.
+    A root-level preference is injected first (`PREFERENCES.md` when present;
+    otherwise `PREFERENCES.default.md`). Then for each channel prefix inject
+    `<prefix>.md` and `<prefix>/PREFERENCES.md`.
     The loaded preference content is appended to the run's user prompt context
     (after `<System>`, before the real instruction content). `by_user`
     preference selection remains channel/starter-specific behavior.
@@ -210,35 +205,31 @@ async def fork(
         )
 
 
-def _read_persona_override(fs_base: Path) -> str:
-    """Load an optional persona override from `fs_base/PERSONA.md`.
+def _root_preference_candidates(pref_root: Path) -> list[Path]:
+    """Build root-level preference candidate file paths in priority order.
 
-    Returns:
-        The override file contents (trimmed) when present and non-empty;
-        otherwise an empty string (meaning "no persona override").
-
-    Notes:
-        This helper is intentionally forgiving: missing/unreadable files are
-        treated as "no override" so agent runs don't fail due to configuration.
+    If `PREFERENCES.md` exists, do not include `PREFERENCES.default.md`.
     """
 
-    try:
-        text = (fs_base / "PERSONA.md").read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        try:
-            text = (fs_base / "PERSONA.default.md").read_text(encoding="utf-8").strip()
-        except (FileNotFoundError, OSError):
-            return ""
-    except OSError:
-        return ""
-    return text or ""
+    preferred = pref_root / "PREFERENCES.md"
+    default = pref_root / "PREFERENCES.default.md"
+    if preferred.exists():
+        return [preferred]
+    return [default]
 
 
 def _channel_preference_candidates(in_channel: str) -> list[Path]:
-    """Build channel-prefix preference candidate file paths in root-to-leaf order."""
+    """Build preference candidate paths in deterministic load order.
+
+    Order:
+    1. Root-level preference (`PREFERENCES.md` or fallback `PREFERENCES.default.md`)
+    2. Channel prefixes from root to leaf:
+       - `<prefix>.md`
+       - `<prefix>/PREFERENCES.md`
+    """
 
     pref_root = Path.home() / ".kapybara" / "preferences"
-    out: list[Path] = []
+    out: list[Path] = _root_preference_candidates(pref_root)
     for prefix in iter_channel_prefixes(in_channel):
         out.append(pref_root / f"{prefix}.md")
         out.append(pref_root / prefix / "PREFERENCES.md")
@@ -246,7 +237,7 @@ def _channel_preference_candidates(in_channel: str) -> list[Path]:
 
 
 def _load_preferences_prompt(*, in_channel: str) -> str:
-    """Load channel-prefix preferences into a prompt chunk.
+    """Load root-level + channel-prefix preferences into a prompt chunk.
 
     Returns:
         Empty string when no preference files match; otherwise a
@@ -371,14 +362,6 @@ agent: Agent[MyDeps, MemoryRecord] = Agent(
 )
 
 
-@agent.system_prompt
-def persona_prompt_from_fs(ctx: RunContext[MyDeps]) -> str:
-    """Return the persona system prompt, preferring `fs_base/PERSONA.md`."""
-
-    fs_base = Path(ctx.deps.config.fs_base)
-    return _read_persona_override(fs_base)
-
-
 agent.system_prompt(lambda: general_prompt)
 agent.system_prompt(lambda: bash_tool_prompt)
 agent.system_prompt(lambda: input_event_prompt)
@@ -471,8 +454,8 @@ async def agent_run(
     User prompt order (fixed):
     1. optional memory context
     2. `<System>Now: ...</System>`
-    3. optional `<Preferences>...</Preferences>` for `in_channel` prefixes
-    4. `<EventMeta>...</EventMeta>`
+    3. `<EventMeta>...</EventMeta>`
+    4. optional `<Preferences>...</Preferences>`
     5. real instruction content (`Event.content`)
     """
 

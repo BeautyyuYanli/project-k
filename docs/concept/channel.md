@@ -46,22 +46,26 @@ Example:
 
 ## Preference injection
 
-For an `in_channel`, inject preferences from root to leaf. For each prefix path
-that exists, inject both files in this order:
+For an `in_channel`, inject preferences in this order:
 
 Preference files are resolved from `~/.kapybara/preferences`.
 
-1. `<prefix>.md`
-2. `<prefix>/PREFERENCES.md`
+1. Root-level preference:
+   - `PREFERENCES.md` if present
+   - otherwise `PREFERENCES.default.md`
+2. For each root-to-leaf channel prefix that exists, inject:
+   - `<prefix>.md`
+   - `<prefix>/PREFERENCES.md`
 
 Example for `telegram/chat/<chat_id>`:
 
-1. `telegram.md`
-2. `telegram/PREFERENCES.md`
-3. `telegram/chat.md`
-4. `telegram/chat/PREFERENCES.md`
-5. `telegram/chat/<chat_id>.md`
-6. `telegram/chat/<chat_id>/PREFERENCES.md`
+1. `PREFERENCES.md`
+2. `telegram.md`
+3. `telegram/PREFERENCES.md`
+4. `telegram/chat.md`
+5. `telegram/chat/PREFERENCES.md`
+6. `telegram/chat/<chat_id>.md`
+7. `telegram/chat/<chat_id>/PREFERENCES.md`
 
 `by_user`-based preference filtering keeps the current behavior.
 

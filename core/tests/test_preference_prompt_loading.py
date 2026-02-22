@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from k.agent.core.agent import _channel_preference_candidates, _load_preferences_prompt
+
+
+def test_channel_preference_candidates_use_root_when_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pref_root = tmp_path / ".kapybara" / "preferences"
+    pref_root.mkdir(parents=True)
+    preferred = pref_root / "PREFERENCES.md"
+    preferred.write_text("preferred", encoding="utf-8")
+
+    candidates = _channel_preference_candidates("telegram/chat/123")
+
+    assert candidates[0] == preferred
+    assert pref_root / "PREFERENCES.default.md" not in candidates
+
+
+def test_channel_preference_candidates_fall_back_to_default_when_root_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pref_root = tmp_path / ".kapybara" / "preferences"
+
+    candidates = _channel_preference_candidates("telegram/chat/123")
+
+    assert candidates[0] == pref_root / "PREFERENCES.default.md"
+
+
+@pytest.mark.parametrize("filename", ["PREFERENCES.md", "PREFERENCES.default.md"])
+def test_load_preferences_prompt_accepts_root_preference_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, filename: str
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pref_root = tmp_path / ".kapybara" / "preferences"
+    pref_root.mkdir(parents=True)
+    root_pref_path = pref_root / filename
+    root_pref_path.write_text("root level preference", encoding="utf-8")
+
+    prompt = _load_preferences_prompt(in_channel="telegram/chat/123")
+
+    assert prompt.startswith("<Preferences>")
+    assert f"Path: {root_pref_path}" in prompt
+    assert "root level preference" in prompt
+
+
+def test_load_preferences_prompt_omits_default_when_root_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pref_root = tmp_path / ".kapybara" / "preferences"
+    pref_root.mkdir(parents=True)
+    preferred = pref_root / "PREFERENCES.md"
+    default = pref_root / "PREFERENCES.default.md"
+    preferred.write_text("preferred root", encoding="utf-8")
+    default.write_text("default root", encoding="utf-8")
+
+    prompt = _load_preferences_prompt(in_channel="telegram/chat/123")
+
+    assert f"Path: {preferred}" in prompt
+    assert "preferred root" in prompt
+    assert f"Path: {default}" not in prompt
+    assert "default root" not in prompt
