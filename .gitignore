@@ -12,7 +12,6 @@ data/fs/*
 data/fs/.kapybara/*
 !data/fs/.kapybara/preferences/
 data/fs/.kapybara/preferences/*
-!data/fs/.kapybara/preferences/PREFERENCES.md
 !data/fs/.kapybara/preferences/PREFERENCES.default.md
 !data/fs/.kapybara/skills/
 data/fs/.kapybara/skills/*
