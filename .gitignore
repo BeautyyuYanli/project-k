@@ -5,11 +5,11 @@
 data/*
 !data/fs/
 data/fs/*
-!data/fs/.bashrc
 
 
 !data/fs/.kapybara/
 data/fs/.kapybara/*
+!data/fs/.kapybara/.bashrc
 !data/fs/.kapybara/preferences/
 data/fs/.kapybara/preferences/*
 !data/fs/.kapybara/preferences/PREFERENCES.default.md
