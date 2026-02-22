@@ -400,7 +400,6 @@ async def agent_run(
         x.dump_compated() if x.id_ in recent_mem else x.dump_raw_pair()
         for x in all_mem_rec
     )
-    preferences_prompt = _load_preferences_prompt(in_channel=instruct.in_channel)
 
     async with MyDeps(
         config=config,
@@ -414,8 +413,8 @@ async def agent_run(
             user_prompt=(
                 f"<Memory>{memory_string}</Memory>\n" if parent_memories else "",
                 f"<System>Now: {datetime.now()}</System>\n",
-                preferences_prompt,
                 _event_meta_prompt(instruct),
+                _load_preferences_prompt(in_channel=instruct.in_channel),
                 instruct.content,
             ),
             message_history=message_history,
