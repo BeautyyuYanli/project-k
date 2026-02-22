@@ -16,7 +16,9 @@ Preference injection:
     Channel preferences are injected from `~/.kapybara/preferences` using
     root-to-leaf `Event.in_channel` prefixes, following `docs/concept/channel.md`:
     for each prefix, inject `<prefix>.md` then `<prefix>/PREFERENCES.md`.
-    `by_user` preference selection remains channel/starter-specific behavior.
+    The loaded preference content is appended to the run's user prompt context
+    (after `<System>`, before the real instruction content). `by_user`
+    preference selection remains channel/starter-specific behavior.
 """
 
 from __future__ import annotations
@@ -83,9 +85,11 @@ class MyDeps:
         needed (prefer `async with MyDeps(...)`).
 
     Input event:
-        System prompts (e.g. skills and preference injection) use
+        Prompt builders use
         `start_event.in_channel` / `start_event.out_channel` as the canonical
-        routing source. Always provide `start_event` for agent runs.
+        routing source. System prompts use these channels for skill injection,
+        and user-prompt context loading uses them for preference injection.
+        Always provide `start_event` for agent runs.
 
     Bash tool cadence:
         `count_down` is decremented once per bash-like tool call (tools that may
@@ -300,13 +304,6 @@ agent.system_prompt(lambda: intent_instruct_prompt)
 
 
 @agent.system_prompt
-def channel_preferences_prompt(ctx: RunContext[MyDeps]) -> str:
-    """Inject channel-prefix preference files from `~/.kapybara/preferences`."""
-
-    return _load_preferences_prompt(in_channel=ctx.deps.start_event.in_channel)
-
-
-@agent.system_prompt
 def concat_skills_prompt(ctx: RunContext[MyDeps]) -> str:
     base_path: str | Path = ctx.deps.config.fs_base
     skills_md = concat_skills_md(base_path)
@@ -383,6 +380,16 @@ async def agent_run(
     message_history: Sequence[ModelMessage] | None = None,
     parent_memories: list[str] | None = None,
 ) -> tuple[str, MemoryRecord]:
+    """Run the agent with memory + event context and persistable output.
+
+    User prompt order (fixed):
+    1. optional memory context
+    2. `<System>Now: ...</System>`
+    3. optional `<Preferences>...</Preferences>` for `in_channel` prefixes
+    4. `<EventMeta>...</EventMeta>`
+    5. real instruction content (`Event.content`)
+    """
+
     parent_memories = parent_memories or []
 
     all_mem_rec, recent_mem = await _memory_select(
@@ -393,6 +400,7 @@ async def agent_run(
         x.dump_compated() if x.id_ in recent_mem else x.dump_raw_pair()
         for x in all_mem_rec
     )
+    preferences_prompt = _load_preferences_prompt(in_channel=instruct.in_channel)
 
     async with MyDeps(
         config=config,
@@ -406,6 +414,7 @@ async def agent_run(
             user_prompt=(
                 f"<Memory>{memory_string}</Memory>\n" if parent_memories else "",
                 f"<System>Now: {datetime.now()}</System>\n",
+                preferences_prompt,
                 _event_meta_prompt(instruct),
                 instruct.content,
             ),

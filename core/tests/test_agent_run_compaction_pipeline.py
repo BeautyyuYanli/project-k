@@ -29,6 +29,10 @@ async def test_agent_run_returns_compacted_memory_record(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     captured_user_prompt: tuple[Any, ...] | None = None
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pref_path = tmp_path / ".kapybara" / "preferences" / "test.md"
+    pref_path.parent.mkdir(parents=True, exist_ok=True)
+    pref_path.write_text("test channel preference", encoding="utf-8")
 
     async def fake_agent_run(**kwargs: Any) -> _FakeRunResult:
         nonlocal captured_user_prompt
@@ -73,8 +77,13 @@ async def test_agent_run_returns_compacted_memory_record(
     assert payload["user_intents"] == "test"
 
     assert captured_user_prompt is not None
-    assert captured_user_prompt[3] == "do something"
-    event_meta = captured_user_prompt[2]
+    assert captured_user_prompt[4] == "do something"
+    preferences = captured_user_prompt[2]
+    assert isinstance(preferences, str)
+    assert preferences.startswith("<Preferences>")
+    assert f"Path: {pref_path}" in preferences
+    assert "test channel preference" in preferences
+    event_meta = captured_user_prompt[3]
     assert isinstance(event_meta, str)
     assert event_meta.startswith("<EventMeta>")
     assert '"in_channel":"test"' in event_meta
