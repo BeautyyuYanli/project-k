@@ -125,22 +125,32 @@ async def fork(
     ctx: RunContext[MyDeps],
     instruct: str,
 ) -> str:
-    """Run `instruct` in a forked agent run. The fork reuses the current conversation and memory context.
+    """Run `instruct` in a forked agent run.
+
+    The fork reuses the current conversation and memory context by copying the
+    current model history and appending a synthetic tool-return message that
+    represents the current tool call completion.
 
     Returns a short status string; on success it includes the forked run's
     compacted memory record.
+
+    Notes:
+        This helper is currently kept for reference and potential re-enable.
+        It is intentionally not registered in `agent.tools` below.
     """
 
     parent_mems = []
     # parent_mems = (
     #     inject_memories if inject_memories else []
     # )
+    # Copy the current exchange so the child run starts from the same context.
     message_history = copy(ctx.messages)
     if isinstance(message_history[-1], ModelResponse):
         if not ctx.tool_name or not ctx.tool_call_id:
             raise RuntimeError(
                 "Tool name and call id must be set when forking from a ModelResponse"
             )
+        # The child run should see this tool call as completed before continuing.
         message_history.append(
             ModelRequest(
                 parts=[
@@ -156,6 +166,7 @@ async def fork(
         raise RuntimeError("Last message when forking must be a ModelResponse")
 
     try:
+        # Run the delegated instruction as a normal agent run with inherited history.
         _res, mem = await agent_run(
             model=ctx.model,
             config=ctx.deps.config,
@@ -220,7 +231,8 @@ agent = cast(
             bash_interrupt,
             edit_file,
             read_media,
-            fork,
+            # `fork` is intentionally disabled for now.
+            # fork,
         ],
         deps_type=MyDeps,
         output_type=ToolOutput(finish_action, name="finish_action"),
