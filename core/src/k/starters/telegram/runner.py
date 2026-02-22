@@ -218,7 +218,7 @@ async def run_agent_for_chat_batch(
     tz: datetime.tzinfo,
 ) -> None:
     try:
-        output, mem = await agent_run(
+        mem = await agent_run(
             model=model,
             config=config,
             memory_store=memory_store,
@@ -274,9 +274,9 @@ async def run_agent_for_chat_batch(
     # across concurrent chat runs to avoid corrupting `order.jsonl`.
     async with append_lock:
         await to_thread.run_sync(memory_store.append, mem)
-    if output.strip():
+    if mem.output.strip():
         prefix = f"[chat_id={chat_id}] " if chat_id is not None else "[chat_id=?] "
-        print(prefix + output)
+        print(prefix + mem.output)
 
 
 def overlay_dispatch_groups_with_recent(
