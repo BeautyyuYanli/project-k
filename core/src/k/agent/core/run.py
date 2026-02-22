@@ -74,12 +74,11 @@ async def main() -> None:
         if i.lower() in {"exit", "quit"}:
             print("Exiting the agent loop.")
             break
-        output, mem = await agent_run(
+        mem = await agent_run(
             model,
             config,
             mem_store,
             Event(in_channel="direct_input", content=i),
         )
-        print(output)
         mem_store.append(mem)
-        print(mem.compacted)
+        print(mem.dump_compated())

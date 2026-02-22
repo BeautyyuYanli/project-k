@@ -4,6 +4,87 @@ These prompts are long, stable strings and are kept in a dedicated module to
 make the wiring code easier to scan.
 """
 
+compacted_prompt = """
+<CompactedRules>
+## Purpose
+When calling `finish_action`, produce clear and reusable memory fields that can
+be read by humans and reused by later agent runs.
+
+## Field mapping (`finish_action`)
+1) `raw_input`
+- Human-readable input summary in natural language.
+- Preserve the user-facing body text verbatim (no translation or semantic
+  rewrite).
+- You may simplify structured payloads (JSON, markup, nested fields) into
+  concise readable statements.
+- Omit metadata that does not affect task understanding or execution.
+
+2) `raw_output`
+- Human-readable output summary in natural language.
+- Same standard as `raw_input`: preserve user-facing body text verbatim (no
+  translation or semantic rewrite).
+- Capture what the agent actually sent to the user in the current task/run.
+- For upload-mode long text or files, output links instead of inlining full
+  payloads.
+
+3) `input_intents`
+- Interpreted intent summary.
+- Include who the input sender is and what they want.
+- If multiple intents exist, include all intents in one structured string
+  (for example, a short numbered list).
+
+4) `compacted_actions`
+- Return a chronological list of high-fidelity task-process step lines.
+- Each line should be unambiguous about actor/action and outcome.
+
+## High-fidelity rule (most important)
+Do **not** over-summarize away the specifics of what the agent:
+- received (inputs/constraints/context),
+- tried (actions, commands, edits, tool calls),
+- observed (tool outputs, errors, test results, confirmations),
+- responded (messages delivered to the user and artifacts produced).
+
+Include failed attempts when they influenced the next step (briefly: what was
+tried, what went wrong, what changed).
+
+## Output format
+- Return a list of strings.
+- Do not require any fixed per-line prefix, but each line must be unambiguous
+  about who did what (tool result vs agent action).
+
+## What to keep (optimize for reuse)
+- Preserve the full task arc.
+- Keep one major step per line; merge noisy sub-steps that share the same purpose.
+- Prefer concrete, action-oriented phrasing: what was done, why it mattered, and the outcome.
+- Keep details that help someone repeat the work later:
+- tool/skill names, key flags/options, file paths (e.g. `/tmp/...`), IDs (e.g.
+  chat_id), extracted facts/results, and verification signals.
+- Keep user-provided specifics that drive correctness (constraints, examples,
+  acceptance criteria, snippets of inputs/outputs). Quote short fragments when
+  useful; do not paste long payloads.
+- Drop filler that doesn't affect decisions or outcomes (chit-chat, apologies, self-talk, repeated instructions).
+
+## Skills (special rule)
+- If the trace shows the agent reading or relying on a skill doc (`SKILLS.md`),
+  include a short, task-relevant excerpted summary of the skill instructions and
+  the skill path.
+- Skill path `skills:<group_path>/<skill>/SKILLS.md`
+- Summarize in one line per skill (including its description; do not paste the
+  whole doc).
+- Keep only the parts that were relevant to the current task (what was actually
+  used or needed), but include enough to reuse that subset: what it does,
+  required inputs/env vars if mentioned, and the canonical command/API shape.
+
+## Tool/command representation
+- Keep commands readable and actionable. Keep full URLs (including
+  paths/query strings) when they help trace the step; shorten truly huge
+  non-URL payloads/outputs with "...".
+- Do not include secrets or raw tokens. Redact them as `$ENV_VAR`,
+  `<REDACTED>`, or "...", including when they appear inside a URL.
+- Avoid dumping raw tool logs, stack traces, or large structured blobs.
+</CompactedRules>
+"""
+
 bash_tool_prompt = """
 <BashInstruction>
 You have access to a Linux machine via a bash shell, exposed through these tools:

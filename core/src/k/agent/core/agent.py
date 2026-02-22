@@ -19,6 +19,10 @@ Preference injection:
     The loaded preference content is appended to the run's user prompt context
     (after `<System>`, before the real instruction content). `by_user`
     preference selection remains channel/starter-specific behavior.
+
+Memory compaction contract:
+    The canonical high-fidelity `compacted_actions` prompt lives in
+    `k.agent.core.prompts.compacted_prompt`
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from typing import cast
 from pydantic_ai import (
     Agent,
     ModelMessage,
+    ModelRetry,
     RunContext,
     ToolOutput,
 )
@@ -47,11 +52,12 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import KnownModelName, Model
 
 from k.agent.channels import iter_channel_prefixes
-from k.agent.core.entities import Event, MemoryHint, finish_action, tool_exception_guard
+from k.agent.core.entities import Event, tool_exception_guard
 from k.agent.core.media_tools import read_media
 from k.agent.core.prompts import (
     SOP_prompt,
     bash_tool_prompt,
+    compacted_prompt,
     general_prompt,
     input_event_prompt,
     intent_instruct_prompt,
@@ -67,10 +73,10 @@ from k.agent.core.shell_tools import (
     edit_file,
 )
 from k.agent.core.skills_md import concat_skills_md, maybe_load_channel_skill_md
-from k.agent.memory.compactor import run_compaction
-from k.agent.memory.entities import MemoryRecord
+from k.agent.memory.entities import MemoryRecord, is_memory_record_id
 from k.agent.memory.folder import FolderMemoryStore
 from k.agent.memory.paths import memory_root_from_fs_base
+from k.agent.memory.store import MemoryStore
 from k.config import Config
 from k.io_helpers.shell import ShellSessionManager
 from k.runner_helpers.basic_os import BasicOSHelper
@@ -177,7 +183,7 @@ async def fork(
 
     try:
         # Run the delegated instruction as a normal agent run with inherited history.
-        _res, mem = await agent_run(
+        mem = await agent_run(
             model=ctx.model,
             config=ctx.deps.config,
             memory_store=ctx.deps.memory_storage,
@@ -270,8 +276,88 @@ def _load_preferences_prompt(*, in_channel: str) -> str:
     )
 
 
+def _validate_referenced_memory_ids(
+    *,
+    memory_store: MemoryStore,
+    referenced_memory_ids: list[str],
+) -> list[str]:
+    """Validate referenced memory IDs emitted by `finish_action`.
+
+    Raises:
+        ModelRetry: If any id is malformed or does not exist in `memory_store`.
+    """
+
+    invalid_ids = [
+        mem_id for mem_id in referenced_memory_ids if not is_memory_record_id(mem_id)
+    ]
+    if invalid_ids:
+        raise ModelRetry(
+            "Invalid referenced_memory_ids: each id must be a valid MemoryRecord id. "
+            f"Invalid id(s): {invalid_ids}"
+        )
+
+    missing_ids = [
+        mem_id
+        for mem_id in referenced_memory_ids
+        if memory_store.get_by_id(mem_id) is None
+    ]
+    if missing_ids:
+        raise ModelRetry(
+            "Unknown referenced_memory_ids: each id must exist in the current memory store. "
+            f"Missing id(s): {missing_ids}"
+        )
+
+    return list(referenced_memory_ids)
+
+
+def finish_action(
+    ctx: RunContext[MyDeps],
+    referenced_memory_ids: list[str],
+    raw_input: str,
+    raw_output: str,
+    input_intents: str,
+    compacted_actions: list[str],
+) -> MemoryRecord:
+    """Finalize the run with a structured summary.
+
+    Call this as the final step after all required channel responses are sent.
+    The payload should summarize what the user asked and how you reacted.
+    Detailed field contracts are defined in `<CompactedRules>`.
+
+    Args:
+        referenced_memory_ids: Memory record IDs that informed this run.
+            Include only memories directly relevant to this task (do not pass
+            every retrieved memory). Use an empty list when no prior memory was
+            used. Every ID must be a valid existing `MemoryRecord.id_`.
+        raw_input: See `<CompactedRules>` field contract for `raw_input`.
+        raw_output: See `<CompactedRules>` field contract for `raw_output`.
+        input_intents: See `<CompactedRules>` field contract for
+            `input_intents`.
+        compacted_actions: Distilled process log of the whole task.
+            Provide chronological, high-fidelity step lines following
+            `<CompactedRules>`.
+    """
+
+    validated_ids = _validate_referenced_memory_ids(
+        memory_store=ctx.deps.memory_storage,
+        referenced_memory_ids=referenced_memory_ids,
+    )
+    return MemoryRecord(
+        in_channel=ctx.deps.start_event.in_channel,
+        out_channel=ctx.deps.start_event.out_channel,
+        parents=validated_ids,
+        input="",
+        compacted=[
+            f"<input>{raw_input}</input>",
+            f"<intents>{input_intents}</intents>",
+            *compacted_actions,
+            f"<output>{raw_output}</output>",
+        ],
+    )
+
+
 agent = cast(
-    Agent[MyDeps, MemoryHint],
+    Agent[MyDeps, MemoryRecord],
     Agent(
         system_prompt=[],
         tools=[
@@ -305,6 +391,7 @@ agent.system_prompt(lambda: response_instruct_prompt)
 agent.system_prompt(lambda: memory_instruct_prompt)
 agent.system_prompt(lambda: preference_prompt)
 agent.system_prompt(lambda: intent_instruct_prompt)
+agent.system_prompt(lambda: compacted_prompt)
 
 
 @agent.system_prompt
@@ -383,7 +470,7 @@ async def agent_run(
     instruct: Event,
     message_history: Sequence[ModelMessage] | None = None,
     parent_memories: list[str] | None = None,
-) -> tuple[str, MemoryRecord]:
+) -> MemoryRecord:
     """Run the agent with memory + event context and persistable output.
 
     User prompt order (fixed):
@@ -425,24 +512,12 @@ async def agent_run(
         )
     msgs: list[ModelRequest | ModelResponse] = res.new_messages()
     msgs = _strip_history(msgs, (instruct.content,))
-    output_hint = res.output
-    ref_mem = output_hint.referenced_memory_ids
+    memory_record = res.output
+    memory_record.input = instruct.content
+    memory_record.parents = parent_memories + memory_record.parents
+    memory_record.detailed = msgs
 
-    compacted = await run_compaction(
-        model=model,
-        detailed=msgs,
-    )
-
-    mem = MemoryRecord(
-        input=instruct.content,
-        compacted=compacted,
-        output=output_hint.model_dump_json(exclude={"referenced_memory_ids"}),
-        parents=list(set(parent_memories + ref_mem)),
-        detailed=msgs,
-        in_channel=instruct.in_channel,
-        out_channel=instruct.out_channel,
-    )
-    return output_hint.model_dump_json(exclude={"referenced_memory_ids"}), mem
+    return memory_record
 
 
 if __name__ == "__main__":
@@ -463,13 +538,12 @@ if __name__ == "__main__":
             in_channel="test",
             content="use `read_media` tool to read image and describe them to ~/image.txt : 1. https://fastly.picsum.photos/id/59/536/354.jpg?hmac=HQ1B2iVRsA2r75Mxt18dSuJa241-Wggf0VF9BxKQhPc \n 2. ./data/fs/961-536x354.jpg",
         )
-        output, mem = await agent_run(
+        mem = await agent_run(
             model=OpenRouterModel("google/gemini-3-flash-preview"),
             config=config,
             memory_store=memory_store,
             instruct=instruct,
         )
-        print("Agent output:", output)
-        print("New memory record:", mem.dump_compated())
+        print("Agent output:", mem.dump_compated())
 
     asyncio.run(main())

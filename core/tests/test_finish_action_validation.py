@@ -6,15 +6,18 @@ from typing import Any, cast
 import pytest
 from pydantic_ai import ModelRetry, RunContext
 
-from k.agent.core.entities import finish_action
+from k.agent.core.agent import finish_action
 from k.agent.memory.entities import MemoryRecord
 from k.agent.memory.folder import FolderMemoryStore
 
 
 def _ctx_for_store(store: FolderMemoryStore) -> RunContext[Any]:
+    event = SimpleNamespace(in_channel="telegram/chat/1", out_channel=None)
     return cast(
         RunContext[Any],
-        SimpleNamespace(deps=SimpleNamespace(memory_storage=store)),
+        SimpleNamespace(
+            deps=SimpleNamespace(memory_storage=store, start_event=event),
+        ),
     )
 
 
@@ -26,11 +29,20 @@ def test_finish_action_accepts_existing_referenced_memory_ids(tmp_path) -> None:
     result = finish_action(
         _ctx_for_store(store),
         referenced_memory_ids=[parent.id_],
-        from_where_and_response_to_where="test",
-        user_intents="test",
+        raw_input="user asked for test output",
+        raw_output="agent replied with final answer",
+        input_intents="1. verify memory references",
+        compacted_actions=["Received request -> Tried validation -> Observed success"],
     )
 
-    assert result.referenced_memory_ids == [parent.id_]
+    assert result.parents == [parent.id_]
+    assert result.output == "agent replied with final answer"
+    assert result.compacted[0] == "<input>user asked for test output</input>"
+    assert result.compacted[1] == "<output>agent replied with final answer</output>"
+    assert result.compacted[2] == "<intents>1. verify memory references</intents>"
+    assert result.compacted[3:] == [
+        "Received request -> Tried validation -> Observed success"
+    ]
 
 
 def test_finish_action_retries_for_invalid_memory_id(tmp_path) -> None:
@@ -40,8 +52,12 @@ def test_finish_action_retries_for_invalid_memory_id(tmp_path) -> None:
         finish_action(
             _ctx_for_store(store),
             referenced_memory_ids=["not-a-memory-id"],
-            from_where_and_response_to_where="test",
-            user_intents="test",
+            raw_input="user asked for test output",
+            raw_output="agent replied with final answer",
+            input_intents="1. verify memory references",
+            compacted_actions=[
+                "Received request -> Tried validation -> Observed failure"
+            ],
         )
 
 
@@ -55,6 +71,10 @@ def test_finish_action_retries_for_missing_memory_id(tmp_path) -> None:
         finish_action(
             _ctx_for_store(store),
             referenced_memory_ids=[missing_id],
-            from_where_and_response_to_where="test",
-            user_intents="test",
+            raw_input="user asked for test output",
+            raw_output="agent replied with final answer",
+            input_intents="1. verify memory references",
+            compacted_actions=[
+                "Received request -> Tried validation -> Observed failure"
+            ],
         )
