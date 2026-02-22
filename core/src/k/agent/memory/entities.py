@@ -116,7 +116,7 @@ class MemoryRecord(BaseModel):
 
     input: str
     compacted: list[str] = Field(default_factory=list)
-    output: str
+    output: str = ""
     detailed: list[ModelRequest | ModelResponse] = Field(default_factory=list)
 
     @field_validator("in_channel")
