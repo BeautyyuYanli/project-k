@@ -65,22 +65,7 @@ Example for `telegram/chat/<chat_id>`:
 
 `by_user`-based preference filtering keeps the current behavior.
 
-## Migration
+## Required Fields
 
-### Why migrate from `kind`
-
-`kind` is too flat for real routing. Messaging events usually need hierarchical
-coordinates (platform -> chat -> thread -> message scope), and memory retrieval
-often needs "this subtree" rather than one exact label.
-
-The channel model replaces `kind` with path-like channels.
-
-Folder memory stores with legacy `kind` fields must be migrated before loading
-with the channel-only schema:
-
-```bash
-cd core
-PYTHONPATH=src python3 -m k.agent.memory.folder_migrate_kind_to_channel --root ~/memories --apply
-```
-
-Run without `--apply` first for a dry-run report.
+Runtime and retrieval require records/events to use `in_channel` (and optional
+`out_channel`).

@@ -28,25 +28,14 @@ logger = getLogger(__name__)
 
 
 class Event(BaseModel):
-    """Structured input event with hierarchical channel routing."""
+    """Structured input event with hierarchical channel routing.
+
+    `in_channel` is required.
+    """
 
     in_channel: str
     out_channel: str | None = None
     content: str
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_legacy_kind(cls, data: object) -> object:
-        """Map legacy `kind` payloads to the new channel schema."""
-
-        if isinstance(data, dict):
-            payload = dict(cast(dict[str, object], data))
-            if "in_channel" not in payload:
-                legacy_kind = payload.get("kind")
-                if isinstance(legacy_kind, str):
-                    payload["in_channel"] = legacy_kind
-            data = payload
-        return data
 
     @field_validator("in_channel")
     @classmethod

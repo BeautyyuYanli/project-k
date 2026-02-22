@@ -24,6 +24,7 @@ from rich import print
 
 from k.agent.core import Event, agent_run
 from k.agent.memory.folder import FolderMemoryStore
+from k.agent.memory.paths import memory_root_from_fs_base
 from k.config import Config
 
 from .api import TelegramBotApi, TelegramBotApiError
@@ -401,7 +402,7 @@ async def _poll_and_run_forever(
             "dispatch_recent_per_chat requires updates_store_path to be configured"
         )
 
-    mem_store = FolderMemoryStore(root=config.fs_base / "memories")
+    mem_store = FolderMemoryStore(root=memory_root_from_fs_base(config.fs_base))
     if isinstance(model, str):
         model = OpenRouterModel(model)
     api = TelegramBotApi(token=token)

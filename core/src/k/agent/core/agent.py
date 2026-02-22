@@ -70,6 +70,7 @@ from k.agent.core.skills_md import concat_skills_md, maybe_load_channel_skill_md
 from k.agent.memory.compactor import run_compaction
 from k.agent.memory.entities import MemoryRecord
 from k.agent.memory.folder import FolderMemoryStore
+from k.agent.memory.paths import memory_root_from_fs_base
 from k.config import Config
 from k.io_helpers.shell import ShellSessionManager
 from k.runner_helpers.basic_os import BasicOSHelper
@@ -264,7 +265,9 @@ def _load_preferences_prompt(*, in_channel: str) -> str:
     if not blocks:
         return ""
     comment = "**The following are your preferences, written in your first person.**"
-    return f"<Preferences>\n{comment}\n" + "\n".join(blocks).rstrip() + "\n</Preferences>"
+    return (
+        f"<Preferences>\n{comment}\n" + "\n".join(blocks).rstrip() + "\n</Preferences>"
+    )
 
 
 agent = cast(
@@ -455,7 +458,7 @@ if __name__ == "__main__":
         config = Config(
             fs_base=Path("./data/fs"), basic_os_port=2222, basic_os_addr="localhost"
         )
-        memory_store = FolderMemoryStore(config.fs_base / "memories")
+        memory_store = FolderMemoryStore(memory_root_from_fs_base(config.fs_base))
         instruct = Event(
             in_channel="test",
             content="use `read_media` tool to read image and describe them to ~/image.txt : 1. https://fastly.picsum.photos/id/59/536/354.jpg?hmac=HQ1B2iVRsA2r75Mxt18dSuJa241-Wggf0VF9BxKQhPc \n 2. ./data/fs/961-536x354.jpg",

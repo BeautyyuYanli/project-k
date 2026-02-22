@@ -15,6 +15,7 @@ from k.agent.channels import channel_root
 from k.agent.core.agent import agent_run
 from k.agent.core.entities import Event
 from k.agent.memory.folder import FolderMemoryStore
+from k.agent.memory.paths import memory_root_from_fs_base
 from k.config import Config
 
 
@@ -66,7 +67,7 @@ async def main() -> None:
     config = Config()  # type: ignore
     model = OpenRouterModel("openai/gpt-5.2")
     mem_store = FolderMemoryStore(
-        root=config.fs_base / "memories",
+        root=memory_root_from_fs_base(config.fs_base),
     )
     while True:
         i = input("\n> ")
