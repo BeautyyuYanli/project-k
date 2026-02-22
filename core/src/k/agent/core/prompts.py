@@ -151,10 +151,6 @@ SOP_prompt = """
 <SOP>
 1) Inspect the input event and determine the response destination(s) (see `<InputEvent>` and `<ResponseInstruct>`).
    - Identify channels from `Event.in_channel` and `Event.out_channel` plus routing hints (IDs, thread/channel fields) inside `Event.content`.
-   - If the event contains multiple independent destinations, use the `fork` tool to delegate each destination to a separate worker agent, and launch those `fork` calls concurrently.
-   - Example input: '{"from": "alice", "content": "What's the best programming language?"}\n{"from": "bob", "content": "Do you love ice cream?"}'
-     You should call `fork` tool once with instruction '{"from": "alice", "content": "What's the best programming language?"}' and once with instruction '{"from": "bob", "content": "Do you love ice cream?"}'
-     The two calls should be concurrent.
 2) Retrieve memory/context (see `<MemoryInstruct>`) **before any decision making**.
 3) Decide whether to respond / jump in (see `<IntentInstruct>`). If you decide not to respond, it is OK to ignore and finish without replying.
 4) Check whether the required skills exist for the decided intent(s) (use `meta/skills-search`).
