@@ -108,7 +108,7 @@ When deciding whether to respond, use these minimal rules (still 4 rules total):
 
 
 preference_prompt = """
-<Preference>
+<PreferencesManagement>
 The system may load preference files for channel paths and individual users.
 - For each prefix of `Event.in_channel`, inject (if exists) in order:
   - `~/.kapybara/preferences/<prefix>.md`
@@ -118,7 +118,7 @@ The system may load preference files for channel paths and individual users.
 **Autonomous Updates:**
 You can and should autonomously update these preference files when you learn new things about the user or when the user explicitly gives you instructions about your persona, tone, or behavior.
 Use the `edit_file` tool to modify existing preferences or create new ones if they don't exist.
-</Preference>
+</PreferencesManagement>
 """
 
 general_prompt = """

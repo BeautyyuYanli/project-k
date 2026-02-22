@@ -10,6 +10,7 @@ data/fs/*
 
 
 !data/fs/.kapybara/
+data/fs/.kapybara/*
 !data/fs/.kapybara/skills/
 data/fs/.kapybara/skills/*
 !data/fs/.kapybara/skills/core/
