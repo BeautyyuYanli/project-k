@@ -153,7 +153,7 @@ def test_stage_a_user_route_is_cross_in_channel_for_thread_inputs(
     assert routes["ccc"] == {"channel"}
 
 
-def test_stage_a_reads_preferences_from_kapybara_preferences(tmp_path: Path) -> None:
+def test_stage_a_emits_by_user_preference_only(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     records_root = tmp_path / "records"
@@ -186,9 +186,7 @@ def test_stage_a_reads_preferences_from_kapybara_preferences(tmp_path: Path) -> 
     assert proc.returncode == 0, proc.stderr
 
     output = out_path.read_text(encoding="utf-8")
-    assert "Preference (telegram.md):" in output
-    assert "platform preference" in output
-    assert "Preference (telegram/PREFERENCES.md):" in output
-    assert "platform nested preference" in output
+    assert "Preference (telegram.md):" not in output
+    assert "Preference (telegram/PREFERENCES.md):" not in output
     assert "User-specific Preference (from_id: 567113516):" in output
     assert "by-user preference" in output

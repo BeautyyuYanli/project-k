@@ -11,6 +11,14 @@ Persona override:
     `Config.fs_base / "PERSONA.default.md"` exists and is non-empty, its
     contents are used. If neither file is present (or both are empty), no
     persona system prompt is added.
+
+Preference injection:
+    Channel preferences are injected from `~/.kapybara/preferences` using
+    root-to-leaf `Event.in_channel` prefixes, following `docs/concept/channel.md`:
+    for each prefix, inject `<prefix>.md` then `<prefix>/PREFERENCES.md`.
+    The loaded preference content is appended to the run's user prompt context
+    (after `<System>`, before the real instruction content). `by_user`
+    preference selection remains channel/starter-specific behavior.
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import KnownModelName, Model
 
+from k.agent.channels import iter_channel_prefixes
 from k.agent.core.entities import Event, MemoryHint, finish_action, tool_exception_guard
 from k.agent.core.media_tools import read_media
 from k.agent.core.prompts import (
@@ -47,6 +56,7 @@ from k.agent.core.prompts import (
     input_event_prompt,
     intent_instruct_prompt,
     memory_instruct_prompt,
+    preference_prompt,
     response_instruct_prompt,
 )
 from k.agent.core.shell_tools import (
@@ -75,10 +85,11 @@ class MyDeps:
         needed (prefer `async with MyDeps(...)`).
 
     Input event:
-        Some system prompts (e.g. skills selection) depend on the input event's
-        channels. Populate `input_event_in_channel` (and optional
-        `input_event_out_channel`) for runs that provide a structured `Event`
-        payload.
+        Prompt builders use
+        `start_event.in_channel` / `start_event.out_channel` as the canonical
+        routing source. System prompts use these channels for skill injection,
+        and user-prompt context loading uses them for preference injection.
+        Always provide `start_event` for agent runs.
 
     Bash tool cadence:
         `count_down` is decremented once per bash-like tool call (tools that may
@@ -90,9 +101,7 @@ class MyDeps:
     config: Config
     memory_storage: FolderMemoryStore
     memory_parents: list[str]
-    input_event_in_channel: str
-    input_event_out_channel: str | None = None
-    start_event: Event | None = None
+    start_event: Event
     bash_cmd_history: list[str] = field(default_factory=list)
     count_down: int = 6
     stuck_warning: int = 0
@@ -172,8 +181,8 @@ async def fork(
             config=ctx.deps.config,
             memory_store=ctx.deps.memory_storage,
             instruct=Event(
-                in_channel=ctx.deps.input_event_in_channel,
-                out_channel=ctx.deps.input_event_out_channel,
+                in_channel=ctx.deps.start_event.in_channel,
+                out_channel=ctx.deps.start_event.out_channel,
                 content="You are the forked agent to complete only the following instruct, ignoring the previous ones.\nInstruction: "
                 + instruct,
             ),
@@ -220,6 +229,44 @@ def _read_persona_override(fs_base: Path) -> str:
     return text or ""
 
 
+def _channel_preference_candidates(in_channel: str) -> list[Path]:
+    """Build channel-prefix preference candidate file paths in root-to-leaf order."""
+
+    pref_root = Path.home() / ".kapybara" / "preferences"
+    out: list[Path] = []
+    for prefix in iter_channel_prefixes(in_channel):
+        out.append(pref_root / f"{prefix}.md")
+        out.append(pref_root / prefix / "PREFERENCES.md")
+    return out
+
+
+def _load_preferences_prompt(*, in_channel: str) -> str:
+    """Load channel-prefix preferences into a prompt chunk.
+
+    Returns:
+        Empty string when no preference files match; otherwise a
+        `<Preferences>...</Preferences>` block with one section per loaded file.
+        Each section starts with its corresponding absolute file path.
+    """
+
+    blocks: list[str] = []
+    for path in _channel_preference_candidates(in_channel):
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        blocks.append("\n".join([f"Path: {path}", text, "---"]))
+
+    if not blocks:
+        return ""
+    comment = "**The following are your preferences, written in your first person.**"
+    return f"<Preferences>\n{comment}\n" + "\n".join(blocks).rstrip() + "\n</Preferences>"
+
+
 agent = cast(
     Agent[MyDeps, MemoryHint],
     Agent(
@@ -253,6 +300,7 @@ agent.system_prompt(lambda: bash_tool_prompt)
 agent.system_prompt(lambda: input_event_prompt)
 agent.system_prompt(lambda: response_instruct_prompt)
 agent.system_prompt(lambda: memory_instruct_prompt)
+agent.system_prompt(lambda: preference_prompt)
 agent.system_prompt(lambda: intent_instruct_prompt)
 
 
@@ -260,8 +308,9 @@ agent.system_prompt(lambda: intent_instruct_prompt)
 def concat_skills_prompt(ctx: RunContext[MyDeps]) -> str:
     base_path: str | Path = ctx.deps.config.fs_base
     skills_md = concat_skills_md(base_path)
-    in_channel = ctx.deps.input_event_in_channel
-    out_channel = ctx.deps.input_event_out_channel or in_channel
+    event = ctx.deps.start_event
+    in_channel = event.in_channel
+    out_channel = event.effective_out_channel
 
     channel_chunks = [
         maybe_load_channel_skill_md(base_path, group="context", channel=in_channel),
@@ -332,6 +381,16 @@ async def agent_run(
     message_history: Sequence[ModelMessage] | None = None,
     parent_memories: list[str] | None = None,
 ) -> tuple[str, MemoryRecord]:
+    """Run the agent with memory + event context and persistable output.
+
+    User prompt order (fixed):
+    1. optional memory context
+    2. `<System>Now: ...</System>`
+    3. optional `<Preferences>...</Preferences>` for `in_channel` prefixes
+    4. `<EventMeta>...</EventMeta>`
+    5. real instruction content (`Event.content`)
+    """
+
     parent_memories = parent_memories or []
 
     all_mem_rec, recent_mem = await _memory_select(
@@ -347,8 +406,7 @@ async def agent_run(
         config=config,
         memory_storage=memory_store,
         memory_parents=parent_memories,
-        input_event_in_channel=instruct.in_channel,
-        input_event_out_channel=instruct.out_channel,
+        start_event=instruct,
     ) as my_deps:
         res = await agent.run(
             model=model,
@@ -357,6 +415,7 @@ async def agent_run(
                 f"<Memory>{memory_string}</Memory>\n" if parent_memories else "",
                 f"<System>Now: {datetime.now()}</System>\n",
                 _event_meta_prompt(instruct),
+                _load_preferences_prompt(in_channel=instruct.in_channel),
                 instruct.content,
             ),
             message_history=message_history,
