@@ -11,9 +11,9 @@ Preference injection:
     A root-level preference is injected first (`PREFERENCES.md` when present;
     otherwise `PREFERENCES.default.md`). Then for each channel prefix inject
     `<prefix>.md` and `<prefix>/PREFERENCES.md`.
-    The loaded preference content is appended to the run's user prompt context
-    (after `<System>`, before the real instruction content). `by_user`
-    preference selection remains channel/starter-specific behavior.
+    The loaded preference content is injected as a dynamic system prompt before
+    skills are concatenated. `by_user` preference selection remains
+    channel/starter-specific behavior.
 
 Memory compaction contract:
     The canonical high-fidelity `compacted_actions` prompt lives in
@@ -89,8 +89,8 @@ class MyDeps:
     Input event:
         Prompt builders use
         `start_event.in_channel` / `start_event.out_channel` as the canonical
-        routing source. System prompts use these channels for skill injection,
-        and user-prompt context loading uses them for preference injection.
+        routing source. System prompts use these channels for preference + skill
+        injection.
         Always provide `start_event` for agent runs.
 
     Bash tool cadence:
@@ -378,6 +378,17 @@ agent.system_prompt(lambda: compacted_prompt)
 
 
 @agent.system_prompt
+def preferences_system_prompt(ctx: RunContext[MyDeps]) -> str:
+    """Inject channel-scoped preferences ahead of skill documents.
+
+    Registration order matters: this function is intentionally declared before
+    `concat_skills_prompt` so preference guidance appears first.
+    """
+
+    return _load_preferences_prompt(in_channel=ctx.deps.start_event.in_channel)
+
+
+@agent.system_prompt
 def concat_skills_prompt(ctx: RunContext[MyDeps]) -> str:
     base_path: str | Path = ctx.deps.config.fs_base
     skills_md = concat_skills_md(base_path)
@@ -460,8 +471,7 @@ async def agent_run(
     1. optional memory context
     2. `<System>Now: ...</System>`
     3. `<EventMeta>...</EventMeta>`
-    4. optional `<Preferences>...</Preferences>`
-    5. real instruction content (`Event.content`)
+    4. real instruction content (`Event.content`)
     """
 
     parent_memories = parent_memories or []
@@ -488,7 +498,6 @@ async def agent_run(
                 f"<Memory>{memory_string}</Memory>\n" if parent_memories else "",
                 f"<System>Now: {datetime.now()}</System>\n",
                 _event_meta_prompt(instruct),
-                _load_preferences_prompt(in_channel=instruct.in_channel),
                 instruct.content,
             ),
             message_history=message_history,
