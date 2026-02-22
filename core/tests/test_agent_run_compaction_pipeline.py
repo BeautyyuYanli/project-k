@@ -78,12 +78,12 @@ async def test_agent_run_returns_compacted_memory_record(
 
     assert captured_user_prompt is not None
     assert captured_user_prompt[4] == "do something"
-    preferences = captured_user_prompt[2]
+    preferences = captured_user_prompt[3]
     assert isinstance(preferences, str)
     assert preferences.startswith("<Preferences>")
     assert f"Path: {pref_path}" in preferences
     assert "test channel preference" in preferences
-    event_meta = captured_user_prompt[3]
+    event_meta = captured_user_prompt[2]
     assert isinstance(event_meta, str)
     assert event_meta.startswith("<EventMeta>")
     assert '"in_channel":"test"' in event_meta

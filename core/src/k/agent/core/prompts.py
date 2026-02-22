@@ -190,11 +190,7 @@ When deciding whether to respond, use these minimal rules (still 4 rules total):
 
 preference_prompt = """
 <PreferencesManagement>
-The system may load preference files for channel paths and individual users.
-- For each prefix of `Event.in_channel`, inject (if exists) in order:
-  - `~/.kapybara/preferences/<prefix>.md`
-  - `~/.kapybara/preferences/<prefix>/PREFERENCES.md`
-- Keep existing by-user selection logic where available (e.g. `by_user/<user_id>.md`).
+The system may load preference files automatically based on channel and user context.
 
 **Autonomous Updates:**
 You can and should autonomously update these preference files when you learn new things about the user or when the user explicitly gives you instructions about your persona, tone, or behavior.
