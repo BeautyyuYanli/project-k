@@ -23,7 +23,7 @@ class BasicOSHelper:
             env = {}
         return (
             self.command_base()
-            + "'. ~/.kapybara/.bashrc; "
+            + f"'. {self.config.config_base}/.bashrc; "
             + single_quote_escape(
                 "".join(
                     f"{key}='{single_quote_escape(value)}'; "
