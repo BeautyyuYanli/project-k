@@ -38,11 +38,12 @@ def test_finish_action_accepts_existing_referenced_memory_ids(tmp_path) -> None:
     assert result.parents == [parent.id_]
     assert result.output == "agent replied with final answer"
     assert result.compacted[0] == "<input>user asked for test output</input>"
-    assert result.compacted[1] == "<output>agent replied with final answer</output>"
-    assert result.compacted[2] == "<intents>1. verify memory references</intents>"
-    assert result.compacted[3:] == [
-        "Received request -> Tried validation -> Observed success"
-    ]
+    assert result.compacted[1] == "<intents>1. verify memory references</intents>"
+    assert (
+        result.compacted[2]
+        == "Received request -> Tried validation -> Observed success"
+    )
+    assert result.compacted[3] == "<output>agent replied with final answer</output>"
 
 
 def test_finish_action_retries_for_invalid_memory_id(tmp_path) -> None:
@@ -61,20 +62,21 @@ def test_finish_action_retries_for_invalid_memory_id(tmp_path) -> None:
         )
 
 
-def test_finish_action_retries_for_missing_memory_id(tmp_path) -> None:
+def test_finish_action_ignores_missing_memory_id(tmp_path) -> None:
     store = FolderMemoryStore(tmp_path / "memories")
     missing_id = MemoryRecord(
         in_channel="telegram/chat/1", input="in", output="out"
     ).id_
 
-    with pytest.raises(ModelRetry, match="Unknown referenced_memory_ids"):
-        finish_action(
-            _ctx_for_store(store),
-            referenced_memory_ids=[missing_id],
-            raw_input="user asked for test output",
-            raw_output="agent replied with final answer",
-            input_intents="1. verify memory references",
-            compacted_actions=[
-                "Received request -> Tried validation -> Observed failure"
-            ],
-        )
+    result = finish_action(
+        _ctx_for_store(store),
+        referenced_memory_ids=[missing_id],
+        raw_input="user asked for test output",
+        raw_output="agent replied with final answer",
+        input_intents="1. verify memory references",
+        compacted_actions=[
+            "Received request -> Tried validation -> Observed missing memory"
+        ],
+    )
+
+    assert result.parents == []
