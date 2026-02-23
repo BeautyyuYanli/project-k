@@ -28,11 +28,13 @@ Design notes / boundaries:
 - The starter also persists per-chat trigger cursors (last dispatched
   `update_id`) next to the updates store.
 - Updates are accumulated in-memory until a trigger condition is met. Once
-  triggered, the starter forwards *all pending* updates, grouped by `chat.id`,
-  and starts one background :func:`k.agent.core.agent_run` per chat group.
+  triggered, the starter forwards pending updates grouped by `chat.id`, and
+  starts one background :func:`k.agent.core.agent_run` per chat group.
   - Optional mode: when `--dispatch-recent-per-chat > 0`, each dispatched chat
-    batch is replaced by that chat's latest `N` stored updates from
-    `--updates-store-path` (if available). Defaults preserve historical behavior.
+    group is capped to the latest `N` updates.
+    - If `--updates-store-path` is set, dispatch prefers that chat's latest
+      `N` stored updates (when available).
+    - Otherwise the cap is applied directly to the in-memory pending group.
   - Regardless of source (`pending` or stored recent), dispatch for each chat is
     constrained to updates newer than that chat's persisted trigger cursor.
   - When `--chat_id` is provided, it is treated as a *trigger watchlist*:

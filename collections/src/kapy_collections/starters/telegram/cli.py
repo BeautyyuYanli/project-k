@@ -66,9 +66,9 @@ def _parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=0,
         help=(
-            "When > 0 and --updates-store-path is set, dispatch the latest N stored "
-            "updates per chat instead of the current pending batch. "
-            "Default 0 keeps existing behavior."
+            "When > 0, cap each dispatched chat batch to the latest N updates. "
+            "If --updates-store-path is set, dispatch prefers the latest N stored "
+            "updates per chat; otherwise it caps the current pending batch."
         ),
     )
     parser.add_argument(

@@ -9,6 +9,7 @@ from kapy_collections.starters.telegram import (
     trigger_cursor_state_path_for_updates_store,
 )
 from kapy_collections.starters.telegram.runner import (
+    cap_dispatch_groups_per_chat,
     filter_dispatch_groups_after_last_trigger,
     overlay_dispatch_groups_with_recent,
     update_last_trigger_update_id_by_chat,
@@ -177,3 +178,34 @@ def test_update_last_trigger_update_id_by_chat_advances_max_per_chat() -> None:
 
     assert updated_chats == 2
     assert state == {1: 15, 2: 7}
+
+
+def test_cap_dispatch_groups_per_chat_keeps_latest_updates() -> None:
+    dispatch_groups = {
+        1: [
+            {"update_id": 1, "message": {"chat": {"id": 1}}},
+            {"update_id": 2, "message": {"chat": {"id": 1}}},
+            {"update_id": 3, "message": {"chat": {"id": 1}}},
+        ],
+        2: [
+            {"update_id": 10, "message": {"chat": {"id": 2}}},
+        ],
+    }
+
+    capped, dropped_updates, capped_groups = cap_dispatch_groups_per_chat(
+        dispatch_groups,
+        per_chat_limit=2,
+    )
+
+    assert [u["update_id"] for u in capped[1]] == [2, 3]
+    assert [u["update_id"] for u in capped[2]] == [10]
+    assert dropped_updates == 1
+    assert capped_groups == 1
+
+
+def test_cap_dispatch_groups_per_chat_rejects_non_positive_limit() -> None:
+    with pytest.raises(ValueError, match="per_chat_limit"):
+        cap_dispatch_groups_per_chat(
+            {1: [{"update_id": 1, "message": {"chat": {"id": 1}}}]},
+            per_chat_limit=0,
+        )

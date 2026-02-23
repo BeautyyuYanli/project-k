@@ -302,6 +302,41 @@ def overlay_dispatch_groups_with_recent(
     return selected, replaced
 
 
+def cap_dispatch_groups_per_chat(
+    dispatch_groups: dict[int | None, list[dict[str, Any]]],
+    *,
+    per_chat_limit: int,
+) -> tuple[dict[int | None, list[dict[str, Any]]], int, int]:
+    """Keep only each chat's latest `N` updates.
+
+    Args:
+        dispatch_groups: Per-chat updates selected for dispatch.
+        per_chat_limit: Maximum updates to keep per chat. Must be > 0.
+
+    Returns:
+        `(capped_groups, dropped_updates, capped_groups_count)` where:
+        - `capped_groups` preserves key order and per-chat chronological order.
+        - `dropped_updates` counts discarded older updates.
+        - `capped_groups_count` counts chat groups that were truncated.
+    """
+
+    if per_chat_limit <= 0:
+        raise ValueError(f"per_chat_limit must be > 0; got {per_chat_limit}")
+
+    capped: dict[int | None, list[dict[str, Any]]] = {}
+    dropped_updates = 0
+    capped_groups_count = 0
+    for chat_id, updates in dispatch_groups.items():
+        if len(updates) > per_chat_limit:
+            capped[chat_id] = updates[-per_chat_limit:]
+            dropped_updates += len(updates) - per_chat_limit
+            capped_groups_count += 1
+        else:
+            capped[chat_id] = updates
+
+    return capped, dropped_updates, capped_groups_count
+
+
 def filter_dispatch_groups_after_last_trigger(
     dispatch_groups: dict[int | None, list[dict[str, Any]]],
     *,
@@ -395,10 +430,6 @@ async def _poll_and_run_forever(
     if dispatch_recent_per_chat < 0:
         raise ValueError(
             f"dispatch_recent_per_chat must be >= 0; got {dispatch_recent_per_chat}"
-        )
-    if dispatch_recent_per_chat > 0 and updates_store_path is None:
-        raise ValueError(
-            "dispatch_recent_per_chat requires updates_store_path to be configured"
         )
 
     mem_store = FolderMemoryStore(
@@ -630,6 +661,20 @@ async def _poll_and_run_forever(
             if cursor_dropped_updates:
                 dispatch_source += "+cursor"
 
+            capped_dropped_updates = 0
+            capped_dropped_groups = 0
+            if dispatch_recent_per_chat > 0:
+                (
+                    dispatch_groups,
+                    capped_dropped_updates,
+                    capped_dropped_groups,
+                ) = cap_dispatch_groups_per_chat(
+                    dispatch_groups,
+                    per_chat_limit=dispatch_recent_per_chat,
+                )
+                if capped_dropped_updates:
+                    dispatch_source += "+cap"
+
             flags = trigger_flags_for_updates(
                 pending_updates_in_order,
                 keyword=keyword,
@@ -646,6 +691,7 @@ async def _poll_and_run_forever(
                 + "forum_topic_created_dropped_groups="
                 + f"{forum_topic_created_dropped_groups} "
                 + f"cursor_dropped_updates={cursor_dropped_updates} cursor_dropped_groups={cursor_dropped_groups} "
+                + f"cap_dropped_updates={capped_dropped_updates} cap_dropped_groups={capped_dropped_groups} "
                 + f"reasons={reasons}"
             )
 

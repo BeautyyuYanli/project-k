@@ -38,6 +38,7 @@ from ..telegram.history import (
 )
 from ..telegram.runner import (
     _telegram_updates_to_event_text_only_compaction,
+    cap_dispatch_groups_per_chat,
     filter_dispatch_groups_after_last_trigger,
     filter_dispatch_groups_without_forum_topic_created_updates,
     overlay_dispatch_groups_with_recent,
@@ -215,10 +216,6 @@ async def run_amqp_forever(
     if dispatch_recent_per_chat < 0:
         raise ValueError(
             f"dispatch_recent_per_chat must be >= 0; got {dispatch_recent_per_chat}"
-        )
-    if dispatch_recent_per_chat > 0 and updates_store_path is None:
-        raise ValueError(
-            "dispatch_recent_per_chat requires updates_store_path to be configured"
         )
 
     mem_store = FolderMemoryStore(root=config.config_base / "memories")
@@ -458,6 +455,20 @@ async def run_amqp_forever(
                             if cursor_dropped_updates:
                                 dispatch_source += "+cursor"
 
+                            capped_dropped_updates = 0
+                            capped_dropped_groups = 0
+                            if dispatch_recent_per_chat > 0:
+                                (
+                                    dispatch_groups,
+                                    capped_dropped_updates,
+                                    capped_dropped_groups,
+                                ) = cap_dispatch_groups_per_chat(
+                                    dispatch_groups,
+                                    per_chat_limit=dispatch_recent_per_chat,
+                                )
+                                if capped_dropped_updates:
+                                    dispatch_source += "+cap"
+
                             print(
                                 "[green]AMQP trigger[/green] "
                                 + f"pending={len(pending_updates_in_order)} groups={len(dispatch_groups)} "
@@ -467,6 +478,7 @@ async def run_amqp_forever(
                                 + "forum_topic_created_dropped_groups="
                                 + f"{forum_topic_created_dropped_groups} "
                                 + f"cursor_dropped_updates={cursor_dropped_updates} cursor_dropped_groups={cursor_dropped_groups} "
+                                + f"cap_dropped_updates={capped_dropped_updates} cap_dropped_groups={capped_dropped_groups} "
                                 + f"persisted={persisted if updates_store_path is not None else None}"
                             )
 
