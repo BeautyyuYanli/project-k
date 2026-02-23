@@ -1,6 +1,5 @@
 import pytest
-
-from k.starters.telegram import TelegramBotApi
+from kapy_collections.starters.telegram import TelegramBotApi
 
 
 @pytest.mark.anyio
@@ -9,7 +8,7 @@ async def test_telegram_bot_api_async_wrappers_call_sync_impl(monkeypatch) -> No
 
     got_me_called = False
     got_updates: tuple[int | None, int] | None = None
-    got_send_message: tuple[int, str, int | None, str] | None = None
+    got_send_message: tuple[int, str, int | None, int | None, str] | None = None
 
     def fake_get_me_sync(self):
         nonlocal got_me_called
@@ -27,10 +26,17 @@ async def test_telegram_bot_api_async_wrappers_call_sync_impl(monkeypatch) -> No
         chat_id: int,
         text: str,
         reply_to_message_id: int | None = None,
+        message_thread_id: int | None = None,
         parse_mode: str = "HTML",
     ):
         nonlocal got_send_message
-        got_send_message = (chat_id, text, reply_to_message_id, parse_mode)
+        got_send_message = (
+            chat_id,
+            text,
+            reply_to_message_id,
+            message_thread_id,
+            parse_mode,
+        )
         return {"message_id": 999}
 
     monkeypatch.setattr(TelegramBotApi, "_get_me_sync", fake_get_me_sync)
@@ -46,5 +52,5 @@ async def test_telegram_bot_api_async_wrappers_call_sync_impl(monkeypatch) -> No
     assert updates[0]["update_id"] == 1
 
     msg = await api.send_message(chat_id=42, text="hello", reply_to_message_id=7)
-    assert got_send_message == (42, "hello", 7, "HTML")
+    assert got_send_message == (42, "hello", 7, None, "HTML")
     assert msg["message_id"] == 999

@@ -1,7 +1,7 @@
 import json
 from datetime import UTC
 
-from k.starters.telegram import telegram_update_to_event_json
+from kapy_collections.starters.telegram import telegram_update_to_event_json
 
 
 def test_telegram_update_to_event_json_roundtrip() -> None:

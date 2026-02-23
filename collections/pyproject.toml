@@ -1,0 +1,49 @@
+[project]
+name = "kapy-collections"
+version = "0.1.0"
+description = "Default template for PDM package"
+authors = [
+    {name = "盐粒 Yanli", email = "mail@yanli.one"},
+]
+dependencies = ["anyio>=4.12.1", "pydantic-ai-slim>=1.62.0"]
+requires-python = ">=3.13"
+readme = "README.md"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "ruff>=0.15.0",
+    "ty>=0.0.17",
+]
+
+[tool.ruff]
+# Ruff doesn't yet recognize `py314`; keep this at the newest supported target.
+target-version = "py312"
+extend-exclude = [".venv", ".pdm-build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "SIM", "PIE", "RUF"]
+ignore = ["N818", "E501", "SIM108", "SIM103", "B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.ty.src]
+exclude = ["tests/"]
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.scripts]
+lint = "ruff check . --fix"
+format = "ruff format ."
+fix = {composite = ["format", "lint"]}
+typecheck = "ty check ."
+test = { cmd = "pytest", env = { PYTHONPATH = "src" } }

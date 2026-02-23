@@ -28,11 +28,11 @@ RUN pip install --no-cache-dir uv ast-grep-cli
 
 WORKDIR /
 
-# Install the local `core/` package into the image.
-# `docker/docker-compose.env.yaml` mounts `core/` to `/core` for live dev, so keep
-# the install path stable at `/core`.
+# Install local packages into the image.
+# Compose files mount these paths for live dev, so keep install paths stable.
 COPY core/ /core/
-RUN uv pip install --system --no-cache -e /core
+COPY collections/ /collections/
+RUN uv pip install --system --no-cache -e /core -e /collections
 
 COPY docker/basic-os/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY docker/basic-os/supervisord.conf /etc/supervisor/conf.d/supervisord.conf

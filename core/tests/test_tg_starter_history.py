@@ -1,15 +1,14 @@
 from pathlib import Path
 
 import pytest
-
-from k.starters.telegram import (
+from kapy_collections.starters.telegram import (
     append_updates_jsonl,
     load_last_trigger_update_id_by_chat,
     load_recent_updates_grouped_by_chat_id,
     save_last_trigger_update_id_by_chat,
     trigger_cursor_state_path_for_updates_store,
 )
-from k.starters.telegram.runner import (
+from kapy_collections.starters.telegram.runner import (
     filter_dispatch_groups_after_last_trigger,
     overlay_dispatch_groups_with_recent,
     update_last_trigger_update_id_by_chat,

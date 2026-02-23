@@ -1,9 +1,7 @@
 from datetime import UTC
 
 import pytest
-
-from k.config import Config
-from k.starters.telegram import (
+from kapy_collections.starters.telegram import (
     _expand_chat_id_watchlist,
     _poll_and_run_forever,
     chat_group_is_triggered,
@@ -18,6 +16,8 @@ from k.starters.telegram import (
     update_matches_keyword,
     update_mentions_bot,
 )
+
+from k.config import Config
 
 
 def test_update_matches_keyword_checks_common_text_fields() -> None:

@@ -1,7 +1,7 @@
 import json
 import time
 
-from k.starters.telegram import (
+from kapy_collections.starters.telegram import (
     filter_updates_in_time_window,
     telegram_updates_to_event,
 )

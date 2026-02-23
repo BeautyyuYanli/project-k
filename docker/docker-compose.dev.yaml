@@ -11,6 +11,6 @@ services:
     volumes:
       - "${HOST_WORKSPACE:?set HOST_WORKSPACE}:/home/k"
       - ../core:/core
+      - ../collections:/collections
     ports:
       - "${SSH_HOST_PORT:-2222}:22"
-

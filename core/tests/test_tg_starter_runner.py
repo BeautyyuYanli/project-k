@@ -1,7 +1,7 @@
 import json
 from datetime import UTC
 
-from k.starters.telegram.runner import (
+from kapy_collections.starters.telegram.runner import (
     _should_compact_update_for_agent,
     _telegram_updates_to_event_text_only_compaction,
     filter_dispatch_groups_without_forum_topic_created_updates,

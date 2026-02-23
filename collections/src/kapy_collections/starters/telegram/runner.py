@@ -18,14 +18,13 @@ from typing import Any
 
 import anyio
 import anyio.to_thread as to_thread
-from pydantic_ai.models import Model
-from pydantic_ai.models.openrouter import OpenRouterModel
-from rich import print
-
 from k.agent.core import Event, agent_run
 from k.agent.memory.folder import FolderMemoryStore
 from k.agent.memory.paths import memory_root_from_fs_base
 from k.config import Config
+from pydantic_ai.models import Model
+from pydantic_ai.models.openrouter import OpenRouterModel
+from rich import print
 
 from .api import TelegramBotApi, TelegramBotApiError
 from .compact import (

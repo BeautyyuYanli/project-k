@@ -48,8 +48,8 @@ Trigger rules:
 - Trigger conditions: keyword match, private chat, reply-to-bot, or @mention.
 
 Implementation note:
-- Internal logic is split across `k.starters.telegram.*` submodules, while this
-  package re-exports the historical public surface for backwards compatibility.
+- Internal logic is split across
+  `kapy_collections.starters.telegram.*` submodules.
 """
 
 from __future__ import annotations

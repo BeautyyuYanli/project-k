@@ -1,4 +1,4 @@
-from k.starters.telegram import (
+from kapy_collections.starters.telegram import (
     extract_update_id,
     filter_unseen_updates,
 )
