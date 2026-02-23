@@ -250,7 +250,7 @@ def test_group_updates_by_chat_id_filters_by_allowlist() -> None:
 
 @pytest.mark.anyio
 async def test_poll_and_run_forever_requires_keyword(tmp_path) -> None:
-    cfg = Config(fs_base=tmp_path)
+    cfg = Config(config_base=tmp_path / ".kapybara")
     with pytest.raises(ValueError, match="--keyword"):
         await _poll_and_run_forever(
             config=cfg,

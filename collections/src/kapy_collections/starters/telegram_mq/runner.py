@@ -221,7 +221,7 @@ async def run_amqp_forever(
             "dispatch_recent_per_chat requires updates_store_path to be configured"
         )
 
-    mem_store = FolderMemoryStore(root=config.fs_base / "memories")
+    mem_store = FolderMemoryStore(root=config.config_base / "memories")
     append_lock = anyio.Lock()
 
     bot_user_id = None

@@ -20,7 +20,7 @@ import anyio
 import anyio.to_thread as to_thread
 from k.agent.core import Event, agent_run
 from k.agent.memory.folder import FolderMemoryStore
-from k.agent.memory.paths import memory_root_from_fs_base
+from k.agent.memory.paths import memory_root_from_config_base
 from k.config import Config
 from pydantic_ai.models import Model
 from pydantic_ai.models.openrouter import OpenRouterModel
@@ -401,7 +401,9 @@ async def _poll_and_run_forever(
             "dispatch_recent_per_chat requires updates_store_path to be configured"
         )
 
-    mem_store = FolderMemoryStore(root=memory_root_from_fs_base(config.fs_base))
+    mem_store = FolderMemoryStore(
+        root=memory_root_from_config_base(config.config_base)
+    )
     if isinstance(model, str):
         model = OpenRouterModel(model)
     api = TelegramBotApi(token=token)

@@ -54,8 +54,8 @@ async def test_agent_run_returns_compacted_memory_record(
 
     monkeypatch.setattr(agent, "run", fake_agent_run)
 
-    config = Config(fs_base=tmp_path)
-    memory_store = FolderMemoryStore(tmp_path / "memories")
+    config = Config(config_base=tmp_path / ".kapybara")
+    memory_store = FolderMemoryStore(config.config_base / "memories")
 
     mem = await agent_run(
         model="test-model",

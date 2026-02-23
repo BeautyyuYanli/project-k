@@ -7,7 +7,7 @@ services:
     environment:
       PUID: "${PUID:?set PUID (e.g. id -u)}"
       PGID: "${PGID:?set PGID (e.g. id -g)}"
-      K_FS_BASE: "/home/k"
+      K_CONFIG_BASE: "/home/k/.kapybara"
       K_BASIC_OS_PORT: "22"
       K_BASIC_OS_ADDR: "localhost"
     volumes:

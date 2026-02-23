@@ -10,17 +10,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from k.agent.channels import channel_root
-from k.agent.core.skills_uri import skills_root_from_fs_base, skills_uri
+from k.agent.core.skills_uri import skills_root_from_config_base, skills_uri
 
 
-def concat_skills_md(base_path: str | Path) -> str:
-    """Scan `<base_path>/.kapybara/skills/{core,meta}/*/SKILLS.md` and concatenate.
+def concat_skills_md(config_base: str | Path) -> str:
+    """Scan `<config_base>/skills/{core,meta}/*/SKILLS.md` and concatenate.
 
     Returns a single string which is the concatenation of all found SKILLS.md files,
     separated by clear delimiters.
     """
 
-    skills_root = skills_root_from_fs_base(base_path)
+    skills_root = skills_root_from_config_base(config_base)
 
     chunks: list[str] = []
 
@@ -47,7 +47,7 @@ def concat_skills_md(base_path: str | Path) -> str:
 
 
 def maybe_load_channel_skill_md(
-    base_path: str | Path,
+    config_base: str | Path,
     *,
     group: str,
     channel: str | None,
@@ -62,7 +62,7 @@ def maybe_load_channel_skill_md(
         return None
 
     root = channel_root(channel)
-    md = skills_root_from_fs_base(base_path) / group / root / "SKILLS.md"
+    md = skills_root_from_config_base(config_base) / group / root / "SKILLS.md"
     if not md.exists():
         return None
 

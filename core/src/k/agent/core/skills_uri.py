@@ -8,8 +8,8 @@ Resolution rules:
       slash) resolved under the skills root directory.
     - The skills root directory is `~/.kapybara/skills` at runtime.
     - In development/tests where we run against a checked-in filesystem tree
-      rooted at `Config.fs_base` (e.g. `./data/fs`), the skills root is
-      `<fs_base>/.kapybara/skills`.
+      rooted at `Config.config_base` (e.g. `./data/fs/.kapybara`), the skills
+      root is `<config_base>/skills`.
     - `skills://...` (authority/netloc) is intentionally unsupported.
 
 These helpers are intentionally small and dependency-free so they can be reused
@@ -24,10 +24,10 @@ from urllib.parse import unquote, urlparse
 SKILLS_URI_SCHEME = "skills"
 
 
-def skills_root_from_fs_base(fs_base: str | Path) -> Path:
-    """Return the skills root under `fs_base`."""
+def skills_root_from_config_base(config_base: str | Path) -> Path:
+    """Return the skills root under `config_base`."""
 
-    return Path(fs_base).expanduser().resolve() / ".kapybara" / "skills"
+    return Path(config_base).expanduser().resolve() / "skills"
 
 
 def skills_uri(relative_path: str | Path) -> str:

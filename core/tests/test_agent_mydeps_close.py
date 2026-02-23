@@ -10,8 +10,8 @@ from k.config import Config
 
 @pytest.mark.anyio
 async def test_mydeps_async_context_closes_cleanly(tmp_path: Path) -> None:
-    config = Config(fs_base=tmp_path)
-    memory_store = FolderMemoryStore(tmp_path / "memories")
+    config = Config(config_base=tmp_path / ".kapybara")
+    memory_store = FolderMemoryStore(config.config_base / "memories")
 
     deps = MyDeps(
         config=config,
