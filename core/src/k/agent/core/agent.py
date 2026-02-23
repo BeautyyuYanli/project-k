@@ -274,8 +274,10 @@ def _validate_referenced_memory_ids(
 ) -> list[str]:
     """Validate referenced memory IDs emitted by `finish_action`.
 
-    Raises:
-        ModelRetry: If any id is malformed or does not exist in `memory_store`.
+    Contract:
+        - Malformed ids still fail fast with `ModelRetry`.
+        - Well-formed but missing ids are dropped. This keeps `finish_action`
+          tolerant to stale references when records were deleted externally.
     """
 
     invalid_ids = [
@@ -287,18 +289,11 @@ def _validate_referenced_memory_ids(
             f"Invalid id(s): {invalid_ids}"
         )
 
-    missing_ids = [
+    return [
         mem_id
         for mem_id in referenced_memory_ids
-        if memory_store.get_by_id(mem_id) is None
+        if memory_store.get_by_id(mem_id) is not None
     ]
-    if missing_ids:
-        raise ModelRetry(
-            "Unknown referenced_memory_ids: each id must exist in the current memory store. "
-            f"Missing id(s): {missing_ids}"
-        )
-
-    return list(referenced_memory_ids)
 
 
 def finish_action(
@@ -319,7 +314,8 @@ def finish_action(
         referenced_memory_ids: Memory record IDs that informed this run.
             Include only memories directly relevant to this task (do not pass
             every retrieved memory). Use an empty list when no prior memory was
-            used. Every ID must be a valid existing `MemoryRecord.id_`.
+            used. Every ID must be a valid `MemoryRecord.id_`; missing IDs are
+            ignored.
         raw_input: See `<CompactedRules>` field contract for `raw_input`.
         raw_output: See `<CompactedRules>` field contract for `raw_output`.
         input_intents: See `<CompactedRules>` field contract for
@@ -338,6 +334,7 @@ def finish_action(
         out_channel=ctx.deps.start_event.out_channel,
         parents=validated_ids,
         input="",
+        output=raw_output,
         compacted=[
             f"<input>{raw_input}</input>",
             f"<intents>{input_intents}</intents>",
