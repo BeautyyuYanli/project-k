@@ -21,10 +21,15 @@ Design notes / invariants:
   max `created_at`.
 - Parsing is strict: invalid ids in `order.jsonl`, invalid JSON, or invalid
   `MemoryRecord` data raises `ValueError` with path/line context.
+- Missing record files referenced by `order.jsonl` are treated as deleted
+  records: load skips them, removes dangling links to them, and tries to bridge
+  their parent/child neighbors when those neighbors are inferable from existing
+  records.
 - `MemoryRecord` loading expects channel fields (`in_channel`, optional
   `out_channel`).
-- `append()` updates each referenced parent's `children` list (persisting parent
-  records) before persisting the new record.
+- `append()` updates each existing referenced parent's `children` list
+  (persisting parent records) before persisting the new record. Missing parent
+  ids are dropped from the appended record.
 - Cache invalidation is keyed off `order.jsonl` mtime/size. If record files are
   modified externally without updating `order.jsonl`, call `refresh()`.
 - Datetime ordering/range checks compare normalized POSIX-millisecond keys so
@@ -335,8 +340,28 @@ def _read_record_id_and_created_at(raw: str, *, path: Path) -> tuple[str, dateti
     return record_id, created_at
 
 
+def _dedupe_existing_ids(ids: list[str], *, existing_ids: set[str]) -> list[str]:
+    """Return ids in original order, keeping only existing ids and removing dups."""
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for id_ in ids:
+        if id_ in seen or id_ not in existing_ids:
+            continue
+        seen.add(id_)
+        out.append(id_)
+    return out
+
+
 class FolderMemoryStore(MemoryStore):
-    """Query and append `MemoryRecord` objects stored in a folder."""
+    """Query and append `MemoryRecord` objects stored in a folder.
+
+    Load behavior is self-healing for missing records:
+    - Order entries whose record file is missing are skipped.
+    - Parent/child ids pointing to missing records are removed.
+    - When both sides are inferable, existing records on each side are bridged
+      directly (`missing.parents -> missing.children`).
+    """
 
     root: Path
     encoding: str
@@ -493,11 +518,14 @@ class FolderMemoryStore(MemoryStore):
                 f"Duplicate MemoryRecord id encountered while appending: {record.id_}"
             )
 
+        existing_ids = set(self._by_id)
+        record.parents = _dedupe_existing_ids(record.parents, existing_ids=existing_ids)
+
         updated_parents: list[MemoryRecord] = []
         for parent_id in record.parents:
             parent = self._by_id.get(parent_id)
             if parent is None:
-                raise KeyError(f"Unknown parent MemoryRecord id: {parent_id}")
+                continue
             if record.id_ not in parent.children:
                 parent.children.append(record.id_)
                 updated_parents.append(parent)
@@ -558,6 +586,7 @@ class FolderMemoryStore(MemoryStore):
         records: list[MemoryRecord] = []
         by_id: dict[str, MemoryRecord] = {}
         record_paths: dict[str, Path] = {}
+        missing_record_ids: set[str] = set()
         for entry in order_entries:
             record_path = self._resolve_record_path(entry)
             if not record_path.exists():
@@ -581,10 +610,11 @@ class FolderMemoryStore(MemoryStore):
                         record_path = core
             try:
                 raw = record_path.read_text(encoding=self.encoding)
-            except FileNotFoundError as e:
-                raise ValueError(
-                    f"Missing record file for id {entry.id_}: {record_path}"
-                ) from e
+            except FileNotFoundError:
+                # Deleted records are tolerated. We repair links around them
+                # after loading all existing records.
+                missing_record_ids.add(entry.id_)
+                continue
             try:
                 record = _load_memory_record_from_disk(
                     record_path,
@@ -611,6 +641,22 @@ class FolderMemoryStore(MemoryStore):
             records.append(record)
             by_id[record.id_] = record
             record_paths[record.id_] = record_path
+
+        repaired_record_ids = self._repair_missing_links(
+            records=records,
+            by_id=by_id,
+            missing_record_ids=missing_record_ids,
+        )
+
+        if missing_record_ids or repaired_record_ids:
+            self._record_paths = dict(record_paths)
+            record_order = {record.id_: idx for idx, record in enumerate(records)}
+            for record_id in sorted(
+                repaired_record_ids, key=lambda id_: record_order[id_]
+            ):
+                record_paths[record_id] = self._persist_record(by_id[record_id])
+            self._persist_order(self._order_entries_for_records(records, record_paths))
+            key = self._stat_key() or key
 
         self._records = records
         self._by_id = by_id
@@ -727,6 +773,99 @@ class FolderMemoryStore(MemoryStore):
 
         self._record_paths[record.id_] = path
         return path
+
+    def _repair_missing_links(
+        self,
+        *,
+        records: list[MemoryRecord],
+        by_id: dict[str, MemoryRecord],
+        missing_record_ids: set[str],
+    ) -> set[str]:
+        """Repair links affected by missing records and return touched record ids."""
+
+        existing_ids = set(by_id)
+        missing_ids = set(missing_record_ids)
+        for record in records:
+            missing_ids.update(id_ for id_ in record.parents if id_ not in existing_ids)
+            missing_ids.update(
+                id_ for id_ in record.children if id_ not in existing_ids
+            )
+
+        if not missing_ids:
+            return set()
+
+        # Infer a missing node's parents from `children` pointers and infer its
+        # children from `parents` pointers, then connect those neighbors directly.
+        missing_to_parents: dict[str, list[str]] = {id_: [] for id_ in missing_ids}
+        missing_to_children: dict[str, list[str]] = {id_: [] for id_ in missing_ids}
+        for record in records:
+            for child_id in record.children:
+                if child_id not in missing_ids:
+                    continue
+                if record.id_ not in missing_to_parents[child_id]:
+                    missing_to_parents[child_id].append(record.id_)
+            for parent_id in record.parents:
+                if parent_id not in missing_ids:
+                    continue
+                if record.id_ not in missing_to_children[parent_id]:
+                    missing_to_children[parent_id].append(record.id_)
+
+        repaired: set[str] = set()
+        for missing_id in missing_ids:
+            parent_ids = missing_to_parents.get(missing_id, [])
+            child_ids = missing_to_children.get(missing_id, [])
+            for parent_id in parent_ids:
+                parent = by_id[parent_id]
+                for child_id in child_ids:
+                    if child_id == parent_id:
+                        continue
+                    child = by_id[child_id]
+                    if child_id not in parent.children:
+                        parent.children.append(child_id)
+                        repaired.add(parent_id)
+                    if parent_id not in child.parents:
+                        child.parents.append(parent_id)
+                        repaired.add(child_id)
+
+        for record in records:
+            cleaned_parents = _dedupe_existing_ids(
+                record.parents,
+                existing_ids=existing_ids,
+            )
+            if cleaned_parents != record.parents:
+                record.parents = cleaned_parents
+                repaired.add(record.id_)
+
+            cleaned_children = _dedupe_existing_ids(
+                record.children,
+                existing_ids=existing_ids,
+            )
+            if cleaned_children != record.children:
+                record.children = cleaned_children
+                repaired.add(record.id_)
+
+        return repaired
+
+    def _order_entries_for_records(
+        self,
+        records: list[MemoryRecord],
+        record_paths: dict[str, Path],
+    ) -> list[_OrderEntry]:
+        """Build order entries in current in-memory append order."""
+
+        entries: list[_OrderEntry] = []
+        for record in records:
+            record_path = record_paths.get(record.id_)
+            if record_path is None:
+                record_path = self._record_path_for(record)
+            entries.append(
+                _OrderEntry(
+                    id_=record.id_,
+                    created_at=record.created_at,
+                    relpath=str(record_path.relative_to(self.root)),
+                )
+            )
+        return entries
 
     def _persist_order(self, entries: list[_OrderEntry]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
