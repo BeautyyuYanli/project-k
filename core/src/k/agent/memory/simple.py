@@ -15,6 +15,8 @@ Design notes / invariants:
   `children` list and persists those changes (by rewriting the JSONL file as a
   whole). This keeps parent/child links consistent when new records are created
   with empty `children`.
+- Datetime ordering/range checks compare normalized POSIX-millisecond keys so
+  legacy timezone-aware records and newer timezone-naive records can coexist.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from k.agent.memory.entities import MemoryRecord
+from k.agent.memory.entities import MemoryRecord, datetime_to_posix_millis
 from k.agent.memory.store import (
     MemoryRecordId,
     MemoryRecordRef,
@@ -107,7 +109,12 @@ class JsonlMemoryRecordStore(MemoryStore):
 
         records = [self._by_id[id_] for id_ in record_ids if id_ in self._by_id]
         order = {record.id_: idx for idx, record in enumerate(self._records)}
-        records.sort(key=lambda r: (r.created_at, order.get(r.id_, 1_000_000_000)))
+        records.sort(
+            key=lambda r: (
+                datetime_to_posix_millis(r.created_at),
+                order.get(r.id_, 1_000_000_000),
+            )
+        )
         return records
 
     def get_parents(
@@ -226,12 +233,14 @@ class JsonlMemoryRecordStore(MemoryStore):
             A list sorted by (`created_at`, file order).
         """
 
-        if start > end:
+        start_key = datetime_to_posix_millis(start)
+        end_key = datetime_to_posix_millis(end)
+        if start_key > end_key:
             raise ValueError(f"start must be <= end; got start={start!r}, end={end!r}")
 
         self._load_if_needed()
 
-        indexed: list[tuple[int, str, datetime]] = []
+        indexed: list[tuple[int, str, int]] = []
         for idx, record in enumerate(self._records):
             if _in_datetime_range(
                 record.created_at,
@@ -240,7 +249,9 @@ class JsonlMemoryRecordStore(MemoryStore):
                 include_start=include_start,
                 include_end=include_end,
             ):
-                indexed.append((idx, record.id_, record.created_at))
+                indexed.append(
+                    (idx, record.id_, datetime_to_posix_millis(record.created_at))
+                )
 
         indexed.sort(key=lambda t: (t[2], t[0]))
         return [record_id for _, record_id, _ in indexed]
@@ -381,19 +392,15 @@ def _in_datetime_range(
     include_start: bool,
     include_end: bool,
 ) -> bool:
-    try:
-        if include_start:
-            left_ok = value >= start
-        else:
-            left_ok = value > start
-        if include_end:
-            right_ok = value <= end
-        else:
-            right_ok = value < end
-        return left_ok and right_ok
-    except TypeError as e:
-        # Most commonly: comparing naive with aware datetimes.
-        raise ValueError(
-            "Datetime comparison failed. Ensure `created_at`, `start`, and `end` "
-            "are all either timezone-aware or timezone-naive."
-        ) from e
+    value_key = datetime_to_posix_millis(value)
+    start_key = datetime_to_posix_millis(start)
+    end_key = datetime_to_posix_millis(end)
+    if include_start:
+        left_ok = value_key >= start_key
+    else:
+        left_ok = value_key > start_key
+    if include_end:
+        right_ok = value_key <= end_key
+    else:
+        right_ok = value_key < end_key
+    return left_ok and right_ok

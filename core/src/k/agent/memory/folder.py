@@ -27,6 +27,8 @@ Design notes / invariants:
   records) before persisting the new record.
 - Cache invalidation is keyed off `order.jsonl` mtime/size. If record files are
   modified externally without updating `order.jsonl`, call `refresh()`.
+- Datetime ordering/range checks compare normalized POSIX-millisecond keys so
+  legacy timezone-aware records and newer timezone-naive records can coexist.
 """
 
 from __future__ import annotations
@@ -41,7 +43,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_ai.messages import BaseToolCallPart, ModelResponse
 
-from k.agent.memory.entities import MemoryRecord
+from k.agent.memory.entities import MemoryRecord, datetime_to_posix_millis
 from k.agent.memory.store import (
     MemoryRecordId,
     MemoryRecordRef,
@@ -380,7 +382,12 @@ class FolderMemoryStore(MemoryStore):
 
         records = [self._by_id[id_] for id_ in record_ids if id_ in self._by_id]
         order = {record.id_: idx for idx, record in enumerate(self._records)}
-        records.sort(key=lambda r: (r.created_at, order.get(r.id_, 1_000_000_000)))
+        records.sort(
+            key=lambda r: (
+                datetime_to_posix_millis(r.created_at),
+                order.get(r.id_, 1_000_000_000),
+            )
+        )
         return records
 
     def get_parents(
@@ -455,12 +462,14 @@ class FolderMemoryStore(MemoryStore):
         include_start: bool = True,
         include_end: bool = True,
     ) -> list[str]:
-        if start > end:
+        start_key = datetime_to_posix_millis(start)
+        end_key = datetime_to_posix_millis(end)
+        if start_key > end_key:
             raise ValueError(f"start must be <= end; got start={start!r}, end={end!r}")
 
         self._load_if_needed()
 
-        indexed: list[tuple[int, str, datetime]] = []
+        indexed: list[tuple[int, str, int]] = []
         for idx, record in enumerate(self._records):
             if _in_datetime_range(
                 record.created_at,
@@ -469,7 +478,9 @@ class FolderMemoryStore(MemoryStore):
                 include_start=include_start,
                 include_end=include_end,
             ):
-                indexed.append((idx, record.id_, record.created_at))
+                indexed.append(
+                    (idx, record.id_, datetime_to_posix_millis(record.created_at))
+                )
 
         indexed.sort(key=lambda t: (t[2], t[0]))
         return [record_id for _, record_id, _ in indexed]
@@ -639,8 +650,8 @@ class FolderMemoryStore(MemoryStore):
                 raise ValueError(f"{e}") from e
             indexed.append((record_id, created_at, str(path.relative_to(self.root))))
 
-        # Stable order for rebuilds: by created_at then id.
-        indexed.sort(key=lambda t: (t[1], str(t[0])))
+        # Stable order for rebuilds: by normalized timestamp then id.
+        indexed.sort(key=lambda t: (datetime_to_posix_millis(t[1]), str(t[0])))
         self._persist_order(
             [
                 _OrderEntry(
@@ -817,18 +828,15 @@ def _in_datetime_range(
     include_start: bool,
     include_end: bool,
 ) -> bool:
-    try:
-        if include_start:
-            left_ok = value >= start
-        else:
-            left_ok = value > start
-        if include_end:
-            right_ok = value <= end
-        else:
-            right_ok = value < end
-        return left_ok and right_ok
-    except TypeError as e:
-        raise ValueError(
-            "Datetime comparison failed. Ensure `created_at`, `start`, and `end` "
-            "are all either timezone-aware or timezone-naive."
-        ) from e
+    value_key = datetime_to_posix_millis(value)
+    start_key = datetime_to_posix_millis(start)
+    end_key = datetime_to_posix_millis(end)
+    if include_start:
+        left_ok = value_key >= start_key
+    else:
+        left_ok = value_key > start_key
+    if include_end:
+        right_ok = value_key <= end_key
+    else:
+        right_ok = value_key < end_key
+    return left_ok and right_ok

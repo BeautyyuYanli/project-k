@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -147,6 +147,36 @@ def test_store_get_between(tmp_path) -> None:
         datetime(2026, 1, 2),
         include_end=False,
     ) == [r1.id_, r2.id_]
+
+
+def test_store_handles_mixed_naive_and_aware_created_at(tmp_path) -> None:
+    path = tmp_path / "mem.jsonl"
+
+    aware = MemoryRecord(
+        in_channel="test",
+        input="aware",
+        compacted=[],
+        output="",
+        detailed=[],
+        created_at=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+    )
+    naive = MemoryRecord(
+        in_channel="test",
+        input="naive",
+        compacted=[],
+        output="",
+        detailed=[],
+        created_at=datetime(2026, 1, 3, 0, 0, 0),
+    )
+
+    _write_records(str(path), [naive, aware])
+    store = JsonlMemoryRecordStore(path)
+
+    assert store.get_by_ids({aware.id_, naive.id_}) == [aware, naive]
+    assert store.get_between(
+        datetime(2025, 12, 31, 0, 0, 0, tzinfo=UTC),
+        datetime(2026, 1, 4, 0, 0, 0),
+    ) == [aware.id_, naive.id_]
 
 
 def test_store_auto_refreshes_on_external_append(tmp_path) -> None:

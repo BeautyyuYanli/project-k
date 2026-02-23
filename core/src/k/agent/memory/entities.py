@@ -45,7 +45,7 @@ _ORDERED_B64_DECODE = {ch: idx for idx, ch in enumerate(_ORDERED_B64_ALPHABET)}
 _EPOCH_UTC = datetime(1970, 1, 1, tzinfo=UTC)
 
 
-def _datetime_to_posix_millis(value: datetime) -> int:
+def datetime_to_posix_millis(value: datetime) -> int:
     """Return the integer POSIX milliseconds represented by `value`.
 
     For timezone-aware datetimes, prefer integer delta arithmetic over
@@ -82,7 +82,7 @@ def memory_record_id_from_created_at(created_at: datetime) -> str:
     encoding of the big-endian 48-bit millisecond timestamp.
     """
 
-    return memory_record_id_from_millis(_datetime_to_posix_millis(created_at))
+    return memory_record_id_from_millis(datetime_to_posix_millis(created_at))
 
 
 def is_memory_record_id(value: str) -> bool:
