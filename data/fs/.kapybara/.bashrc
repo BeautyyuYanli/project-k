@@ -14,9 +14,9 @@ export TZ=UTC
 export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 stty -echo; 
 set -a; 
-[[ -f ~/.env ]] && source ~/.env
+[ -f ~/.env ] && . ~/.env
 set +a; 
-[[ -f ~/.local.bashrc ]] && source ~/.local.bashrc
+[ -f ~/.local.bashrc ] && . ~/.local.bashrc
 
 # Token-efficient JSON for LLM prompts:
 # - `-c`: compact (no pretty whitespace)
