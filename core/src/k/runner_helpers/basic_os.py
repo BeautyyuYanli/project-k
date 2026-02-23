@@ -1,3 +1,11 @@
+"""Helpers for building shell commands in SSH or local PTY mode.
+
+`BasicOSHelper` always builds commands that source `<config_base>/.bashrc`.
+When `Config.ssh_user` + `Config.ssh_addr` are configured, commands run over SSH.
+When both are `None`, commands run locally via `script -q -c ... /dev/null` to
+preserve pseudo-terminal behavior expected by shell-session tools.
+"""
+
 from dataclasses import dataclass
 
 from k.config import Config
@@ -13,17 +21,30 @@ def single_quote(s: str) -> str:
 
 @dataclass(slots=True)
 class BasicOSHelper:
+    """Build shell launcher commands from runtime config."""
+
     config: Config
 
     def command_base(self) -> str:
-        return f'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -tt -i "{self.config.basic_os_sshkey!s}" -p {self.config.basic_os_port} {self.config.basic_os_user}@{self.config.basic_os_addr} '
+        """Return the transport command prefix for shell execution."""
+
+        if self.config.ssh_user is None or self.config.ssh_addr is None:
+            return "script -q -c "
+        return (
+            "ssh -o StrictHostKeyChecking=no "
+            "-o UserKnownHostsFile=/dev/null "
+            '-o LogLevel=ERROR -tt -i "'
+            f'{self.config.ssh_key!s}" -p {self.config.ssh_port} '
+            f"{self.config.ssh_user}@{self.config.ssh_addr} "
+        )
 
     def command(self, command: str, env: dict[str, str] | None = None) -> str:
+        """Build the final command including shell bootstrap and env injection."""
+
         if env is None:
             env = {}
-        return (
-            self.command_base()
-            + f"'. {self.config.config_base}/.bashrc; "
+        payload = (
+            f". {self.config.config_base}/.bashrc; "
             + single_quote_escape(
                 "".join(
                     f"{key}='{single_quote_escape(value)}'; "
@@ -31,8 +52,11 @@ class BasicOSHelper:
                 )
             )
             + single_quote_escape(command)
-            + "'"
         )
+        wrapped_payload = "'" + payload + "'"
+        if self.config.ssh_user is None or self.config.ssh_addr is None:
+            return self.command_base() + wrapped_payload + " /dev/null"
+        return self.command_base() + wrapped_payload
 
 
 async def main():
