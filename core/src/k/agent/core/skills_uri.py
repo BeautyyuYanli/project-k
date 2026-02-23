@@ -6,10 +6,8 @@ docs so references are portable across machines.
 Resolution rules:
     - The `<relative-path>` portion is a filesystem-relative path (no leading
       slash) resolved under the skills root directory.
-    - The skills root directory is `~/.kapybara/skills` at runtime.
-    - In development/tests where we run against a checked-in filesystem tree
-      rooted at `Config.config_base` (e.g. `./data/fs/.kapybara`), the skills
-      root is `<config_base>/skills`.
+    - The skills root directory is `<config_base>/skills` where
+      `config_base` comes from `Config.config_base`.
     - `skills://...` (authority/netloc) is intentionally unsupported.
 
 These helpers are intentionally small and dependency-free so they can be reused

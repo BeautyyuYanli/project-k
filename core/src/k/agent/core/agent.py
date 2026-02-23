@@ -6,8 +6,9 @@ This module owns:
 - `agent_run`: the primary runtime entrypoint (memory selection + compaction).
 
 Preference injection:
-    Channel preferences are injected from `~/.kapybara/preferences` using
-    root-to-leaf `Event.in_channel` prefixes, following `docs/concept/channel.md`.
+    Channel preferences are injected from
+    `<config_base>/preferences` (`Config.config_base`) using root-to-leaf
+    `Event.in_channel` prefixes, following `docs/concept/channel.md`.
     A root-level preference is injected first (`PREFERENCES.md` when present;
     otherwise `PREFERENCES.default.md`). Then for each channel prefix inject
     `<prefix>.md` and `<prefix>/PREFERENCES.md`.
@@ -74,7 +75,11 @@ from k.agent.memory.paths import memory_root_from_config_base
 from k.agent.memory.store import MemoryStore
 from k.config import Config
 from k.io_helpers.shell import ShellSessionManager
-from k.runner_helpers.basic_os import BasicOSHelper
+from k.runner_helpers.basic_os import (
+    AGENT_CONFIG_BASE_EXPR,
+    BasicOSHelper,
+    agent_config_base_value,
+)
 
 
 @dataclass(slots=True)
@@ -220,7 +225,7 @@ def _root_preference_candidates(pref_root: Path) -> list[Path]:
     return [default]
 
 
-def _channel_preference_candidates(in_channel: str) -> list[Path]:
+def _channel_preference_candidates(in_channel: str, *, pref_root: Path) -> list[Path]:
     """Build preference candidate paths in deterministic load order.
 
     Order:
@@ -228,9 +233,13 @@ def _channel_preference_candidates(in_channel: str) -> list[Path]:
     2. Channel prefixes from root to leaf:
        - `<prefix>.md`
        - `<prefix>/PREFERENCES.md`
+
+    Args:
+        in_channel: Input channel used for root-to-leaf prefix expansion.
+        pref_root: Preference root directory, typically
+            `<config_base>/preferences`.
     """
 
-    pref_root = Path.home() / ".kapybara" / "preferences"
     out: list[Path] = _root_preference_candidates(pref_root)
     for prefix in iter_channel_prefixes(in_channel):
         out.append(pref_root / f"{prefix}.md")
@@ -238,8 +247,11 @@ def _channel_preference_candidates(in_channel: str) -> list[Path]:
     return out
 
 
-def _load_preferences_prompt(*, in_channel: str) -> str:
+def _load_preferences_prompt(*, in_channel: str, pref_root: Path) -> str:
     """Load root-level + channel-prefix preferences into a prompt chunk.
+
+    Preference files are resolved under `pref_root` (normally
+    `<config_base>/preferences`).
 
     Returns:
         Empty string when no preference files match; otherwise a
@@ -248,7 +260,7 @@ def _load_preferences_prompt(*, in_channel: str) -> str:
     """
 
     blocks: list[str] = []
-    for path in _channel_preference_candidates(in_channel):
+    for path in _channel_preference_candidates(in_channel, pref_root=pref_root):
         if not path.exists():
             continue
         try:
@@ -382,7 +394,10 @@ def preferences_system_prompt(ctx: RunContext[MyDeps]) -> str:
     `concat_skills_prompt` so preference guidance appears first.
     """
 
-    return _load_preferences_prompt(in_channel=ctx.deps.start_event.in_channel)
+    return _load_preferences_prompt(
+        in_channel=ctx.deps.start_event.in_channel,
+        pref_root=ctx.deps.config.config_base / "preferences",
+    )
 
 
 @agent.system_prompt
@@ -446,6 +461,31 @@ def _event_meta_prompt(event: Event) -> str:
     return f"<EventMeta>{meta_json}</EventMeta>\n"
 
 
+async def _system_runtime_prompt(deps: MyDeps) -> str:
+    """Return runtime metadata that should be explicit to the model.
+
+    `AgentConfigBase` is resolved through the shell runtime path (same transport
+    as bash tools), not from Python process environment variables.
+    """
+
+    try:
+        runtime_config_base = await agent_config_base_value(
+            basic_os_helper=deps.basic_os_helper,
+            shell_manager=deps.shell_manager,
+        )
+    except Exception as exc:
+        runtime_config_base = (
+            f"<unresolved:{type(exc).__name__}:{str(exc).replace(chr(10), ' ')}>"
+        )
+
+    return (
+        "<System>\n"
+        f"Now: {datetime.now()}\n"
+        f"Value of `{AGENT_CONFIG_BASE_EXPR}`: {runtime_config_base}\n"
+        "</System>\n"
+    )
+
+
 async def _memory_select(
     memory_store: FolderMemoryStore,
     parent_memories: list[str],
@@ -474,7 +514,7 @@ async def agent_run(
 
     User prompt order (fixed):
     1. optional memory context
-    2. `<System>Now: ...</System>`
+    2. `<System>Now + agent config-base runtime view</System>`
     3. `<EventMeta>...</EventMeta>`
     4. real instruction content (`Event.content`)
     """
@@ -501,7 +541,7 @@ async def agent_run(
             deps=my_deps,
             user_prompt=(
                 f"<Memory>{memory_string}</Memory>\n" if parent_memories else "",
-                f"<System>Now: {datetime.now()}</System>\n",
+                await _system_runtime_prompt(my_deps),
                 _event_meta_prompt(instruct),
                 instruct.content,
             ),
@@ -529,8 +569,9 @@ if __name__ == "__main__":
     async def main():
         config = Config(
             config_base=Path("./data/fs/.kapybara"),
-            basic_os_port=2222,
-            basic_os_addr="localhost",
+            ssh_port=2222,
+            ssh_addr="localhost",
+            ssh_user="k",
         )
         memory_store = FolderMemoryStore(
             memory_root_from_config_base(config.config_base)

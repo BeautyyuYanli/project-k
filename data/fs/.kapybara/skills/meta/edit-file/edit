@@ -3,7 +3,7 @@
 
 This script is used as a "skill" implementation and is also exercised by
 `core/tests/test_edit_file_skill.py`.
-It is intended to live at `~/.kapybara/skills/meta/edit-file/edit.py`.
+It is intended to live at `~/.kapybara/skills/meta/edit-file/edit`.
 
 Contract:
 - `--start-line` is 1-based (like editors). If provided, `old_content` must match
@@ -177,7 +177,7 @@ def apply_edit(
 
 
 def _parse_args(argv: list[str]) -> tuple[str, int | None, str, str]:
-    parser = argparse.ArgumentParser(prog="edit.py", exit_on_error=False)
+    parser = argparse.ArgumentParser(prog="edit", exit_on_error=False)
     parser.add_argument("--filename", required=True)
     parser.add_argument("--start-line", type=int, required=False)
     parser.add_argument("--old-content", required=True)

@@ -125,7 +125,7 @@ def _compact_telegram_update(
     Important invariant for downstream tooling:
     - For any included `chat` or `from` object, `id` is emitted as the first key
       (e.g. `"from": {"id": 42, ...}`), matching the regex style used by
-      `skills:context/telegram/stage_a` (relative to `~/.kapybara/skills`).
+      `skills:context/telegram/stage_a` (relative to `<config_base>/skills`).
     """
 
     out: dict[str, Any] = {}

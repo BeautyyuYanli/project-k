@@ -13,7 +13,7 @@ def _skill_edit_script() -> Path:
         / "skills"
         / "meta"
         / "edit-file"
-        / "edit.py"
+        / "edit"
     )
 
 

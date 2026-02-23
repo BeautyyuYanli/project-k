@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -12,7 +13,14 @@ from k.io_helpers.shell import ShellSessionOptions
 
 
 @dataclass(slots=True)
+class _FakeConfig:
+    config_base: Path = Path("/tmp/.kapybara")
+
+
+@dataclass(slots=True)
 class _FakeBasicOSHelper:
+    config: _FakeConfig = field(default_factory=_FakeConfig)
+
     def command(self, command: str, env: dict[str, str] | None = None) -> str:
         _ = env
         return command
@@ -22,6 +30,7 @@ class _FakeBasicOSHelper:
 class _FakeShellManager:
     next_results: list[tuple[bytes, bytes, int | None]] = field(default_factory=list)
     new_shell_options: list[object | None] = field(default_factory=list)
+    new_shell_commands: list[str] = field(default_factory=list)
     next_call_timeouts: list[float | None] = field(default_factory=list)
 
     async def new_shell(
@@ -31,7 +40,8 @@ class _FakeShellManager:
         options: object | None = None,
         desc: str | None = None,
     ) -> str:
-        _ = command, options, desc
+        _ = options, desc
+        self.new_shell_commands.append(command)
         self.new_shell_options.append(options)
         return "000001"
 
@@ -109,6 +119,22 @@ async def test_edit_file_decrements_countdown_only_once() -> None:
         start_line=1,
     )
     assert deps.count_down == 1
+
+
+@pytest.mark.anyio
+async def test_edit_file_uses_agent_view_config_base_expression() -> None:
+    deps = _FakeDeps()
+    deps.shell_manager.next_results.append((b"ok\n", b"", 0))
+
+    _ = await edit_file(
+        _ctx(deps),
+        filename="x.txt",
+        old_content="old\n",
+        new_content="new\n",
+    )
+    command = deps.shell_manager.new_shell_commands[0]
+    assert "${K_CONFIG_BASE:-~/.kapybara}/skills/meta/edit-file/edit" in command
+    assert str(deps.basic_os_helper.config.config_base) not in command
 
 
 @pytest.mark.anyio

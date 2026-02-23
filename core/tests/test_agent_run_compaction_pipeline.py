@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from k.agent.core.entities import Event
 from k.agent.memory.entities import MemoryRecord
 from k.agent.memory.folder import FolderMemoryStore
 from k.config import Config
+
+agent_module = importlib.import_module("k.agent.core.agent")
 
 
 @dataclass(slots=True)
@@ -29,9 +32,15 @@ async def test_agent_run_returns_compacted_memory_record(
 ) -> None:
     captured_user_prompt: tuple[Any, ...] | None = None
     monkeypatch.setenv("HOME", str(tmp_path))
+    agent_view_base = tmp_path / "agent-view" / ".kapybara"
+    monkeypatch.setenv("K_CONFIG_BASE", str(agent_view_base))
     pref_path = tmp_path / ".kapybara" / "preferences" / "test.md"
     pref_path.parent.mkdir(parents=True, exist_ok=True)
     pref_path.write_text("test channel preference", encoding="utf-8")
+
+    async def fake_agent_config_base_value(**kwargs: Any) -> str:
+        _ = kwargs
+        return str(agent_view_base)
 
     async def fake_agent_run(**kwargs: Any) -> _FakeRunResult:
         nonlocal captured_user_prompt
@@ -53,6 +62,9 @@ async def test_agent_run_returns_compacted_memory_record(
         )
 
     monkeypatch.setattr(agent, "run", fake_agent_run)
+    monkeypatch.setattr(
+        agent_module, "agent_config_base_value", fake_agent_config_base_value
+    )
 
     config = Config(config_base=tmp_path / ".kapybara")
     memory_store = FolderMemoryStore(config.config_base / "memories")
@@ -70,6 +82,13 @@ async def test_agent_run_returns_compacted_memory_record(
     assert mem.in_channel == "test"
 
     assert captured_user_prompt is not None
+    system_prompt = captured_user_prompt[1]
+    assert isinstance(system_prompt, str)
+    assert system_prompt.startswith("<System>")
+    assert (
+        f"Value of `${{K_CONFIG_BASE:-~/.kapybara}}`: {agent_view_base}"
+        in system_prompt
+    )
     assert captured_user_prompt[3] == "do something"
     assert all(
         not (isinstance(part, str) and part.startswith("<Preferences>"))
