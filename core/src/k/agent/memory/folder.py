@@ -1,11 +1,8 @@
 """Folder-backed storage for :class:`k.agent.memory.entities.MemoryRecord`.
 
-This store persists one record per file under a root folder, plus an append-order
-index file.
+This store persists one record per file under a root folder.
 
 Layout (relative to `root`):
-- `order.jsonl`: one JSON object per non-empty line (append order), storing the
-  record id, `created_at`, and relative path.
 - `records/YYYY/MM/DD/HH/<id>.core.json`: one JSON blob per record (one line),
   storing record metadata and `compacted`.
 - `records/YYYY/MM/DD/HH/<id>.detailed.jsonl`: a JSONL file (one JSON value per
@@ -17,21 +14,22 @@ Layout (relative to `root`):
   persisted in this detailed file.
 
 Design notes / invariants:
-- "Latest" means the last id in `order.jsonl` (append order), not necessarily the
-  max `created_at`.
-- Parsing is strict: invalid ids in `order.jsonl`, invalid JSON, or invalid
-  `MemoryRecord` data raises `ValueError` with path/line context.
-- Missing record files referenced by `order.jsonl` are treated as deleted
-  records: load skips them, removes dangling links to them, and tries to bridge
-  their parent/child neighbors when those neighbors are inferable from existing
+- Store order is the lexicographic order of `MemoryRecord.id_`.
+- "Latest" means the largest id in lexicographic order, not necessarily the max
+  `created_at`.
+- Parsing is strict: invalid JSON or invalid `MemoryRecord` data raises
+  `ValueError` with path/line context.
+- Missing records referenced by parent/child links are treated as deleted
+  records: load removes dangling links to them and tries to bridge their
+  parent/child neighbors when those neighbors are inferable from existing
   records.
 - `MemoryRecord` loading expects channel fields (`in_channel`, optional
   `out_channel`).
 - `append()` updates each existing referenced parent's `children` list
   (persisting parent records) before persisting the new record. Missing parent
   ids are dropped from the appended record.
-- Cache invalidation is keyed off `order.jsonl` mtime/size. If record files are
-  modified externally without updating `order.jsonl`, call `refresh()`.
+- Cache invalidation is keyed off stat snapshots of record-related files under
+  `records/`.
 - Datetime ordering/range checks compare normalized POSIX-millisecond keys so
   legacy timezone-aware records and newer timezone-naive records can coexist.
 """
@@ -39,6 +37,8 @@ Design notes / invariants:
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 import tempfile
 from collections.abc import Set
 from dataclasses import dataclass
@@ -57,17 +57,13 @@ from k.agent.memory.store import (
 )
 
 
-@dataclass(slots=True)
-class _CacheKey:
-    mtime_ns: int
-    size: int
-
-
 @dataclass(frozen=True, slots=True)
-class _OrderEntry:
-    id_: str
-    created_at: datetime
-    relpath: str
+class _CacheKey:
+    file_stats: tuple[tuple[str, int, int], ...]
+
+
+type LineMatch = tuple[int, str]
+type FileMatches = list[tuple[Path, list[LineMatch]]]
 
 
 _CORE_FIELDS: set[str] = {
@@ -309,37 +305,6 @@ def _read_legacy_compacted_sidecar(path: Path, *, encoding: str) -> list[str]:
     return decoded
 
 
-def _read_record_id_and_created_at(raw: str, *, path: Path) -> tuple[str, datetime]:
-    """Return `(id_, created_at)` for a record file (legacy or split core)."""
-
-    try:
-        decoded = json.loads(raw)
-    except ValueError as e:
-        raise ValueError(f"Invalid JSON at {path}: {e}") from e
-
-    if not isinstance(decoded, dict):
-        raise ValueError(f"Invalid MemoryRecord JSON at {path}: expected object")
-
-    raw_id = decoded.get("id_") or decoded.get("id")
-    if not isinstance(raw_id, str):
-        raise ValueError(f"Invalid MemoryRecord JSON at {path}: missing/invalid 'id_'")
-    record_id = coerce_record_id(raw_id)
-
-    raw_created_at = decoded.get("created_at")
-    if not isinstance(raw_created_at, str):
-        raise ValueError(
-            f"Invalid MemoryRecord JSON at {path}: missing/invalid 'created_at'"
-        )
-    try:
-        created_at = datetime.fromisoformat(raw_created_at)
-    except ValueError as e:
-        raise ValueError(
-            f"Invalid MemoryRecord JSON at {path}: invalid 'created_at': {e}"
-        ) from e
-
-    return record_id, created_at
-
-
 def _dedupe_existing_ids(ids: list[str], *, existing_ids: set[str]) -> list[str]:
     """Return ids in original order, keeping only existing ids and removing dups."""
 
@@ -353,11 +318,57 @@ def _dedupe_existing_ids(ids: list[str], *, existing_ids: set[str]) -> list[str]
     return out
 
 
+def _is_loadable_record_file(path: Path) -> bool:
+    """Return whether `path` is a core/legacy record JSON file."""
+
+    name = path.name
+    if name.endswith(".detailed.json"):
+        return False
+    if name.endswith(".detailed.jsonl"):
+        return False
+    if name.endswith(".compacted.json"):
+        return False
+    return name.endswith(".json")
+
+
+def _is_record_related_file(path: Path) -> bool:
+    """Return whether `path` should participate in cache invalidation."""
+
+    name = path.name
+    return name.endswith(
+        (".core.json", ".detailed.json", ".detailed.jsonl", ".compacted.json")
+    ) or _is_loadable_record_file(path)
+
+
+def _parse_rg_lines_with_numbers(output: str) -> list[tuple[Path, int, str]]:
+    """Parse `rg` output lines in `path:line:match` form."""
+
+    parsed: list[tuple[Path, int, str]] = []
+    for raw in output.splitlines():
+        if not raw:
+            continue
+        parts = raw.split(":", 2)
+        if len(parts) != 3:
+            continue
+        path_s, line_s, text = parts
+        try:
+            line_no = int(line_s)
+        except ValueError:
+            continue
+        parsed.append((Path(path_s), line_no, text))
+    return parsed
+
+
 class FolderMemoryStore(MemoryStore):
     """Query and append `MemoryRecord` objects stored in a folder.
 
+    Record order is defined as lexicographic sort by `record.id_`.
+
+    Fast retrieval helpers:
+    - `filter_by_in_channel()` and `search_by_keywords()` mirror Telegram
+      stage_a's no-index lookup strategy and shell out to `rg`.
+
     Load behavior is self-healing for missing records:
-    - Order entries whose record file is missing are skipped.
     - Parent/child ids pointing to missing records are removed.
     - When both sides are inferable, existing records on each side are bridged
       directly (`missing.parents -> missing.children`).
@@ -380,7 +391,7 @@ class FolderMemoryStore(MemoryStore):
         self._record_paths = {}
 
     def refresh(self) -> None:
-        """Force a reload from disk (even if `order.jsonl` did not change)."""
+        """Force a reload from disk (even if cache stat snapshots did not change)."""
 
         self._cache_key = None
         self._load_if_needed()
@@ -510,6 +521,134 @@ class FolderMemoryStore(MemoryStore):
         indexed.sort(key=lambda t: (t[2], t[0]))
         return [record_id for _, record_id, _ in indexed]
 
+    def filter_by_in_channel(
+        self,
+        *,
+        in_channel_prefix: str,
+        records_dir: Path | None = None,
+    ) -> list[Path]:
+        """Return detailed files whose record `in_channel` matches `in_channel_prefix`.
+
+        This is intentionally stage_a-like:
+        - It shells out to `rg` for coarse file discovery.
+        - It then validates each candidate by parsing its sibling `*.core.json`
+          and applying subtree-aware prefix matching.
+        - Files are returned in path order.
+
+        Args:
+            in_channel_prefix: Channel prefix to match by subtree semantics.
+            records_dir: Optional explicit records directory. When omitted,
+                `<self.root>/records` is used.
+        """
+
+        records_dir = records_dir if records_dir is not None else self._records_dir()
+        if not records_dir.exists():
+            return []
+
+        root_segment = in_channel_prefix.split("/", 1)[0]
+        root_pattern = re.escape(root_segment)
+        grep_pattern = rf'"in_channel"\s*:\s*"{root_pattern}(?:/|")'
+
+        try:
+            res = subprocess.run(
+                [
+                    "rg",
+                    "-l",
+                    "--sort",
+                    "path",
+                    "-g",
+                    "*.core.json",
+                    grep_pattern,
+                    str(records_dir),
+                ],
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return []
+
+        if res.returncode not in (0, 1):
+            return []
+
+        detailed_files: list[Path] = []
+        for core_file in (line for line in res.stdout.splitlines() if line):
+            core_path = Path(core_file)
+            try:
+                payload = json.loads(core_path.read_text(encoding=self.encoding))
+            except (OSError, ValueError):
+                continue
+
+            record_channel = (
+                payload.get("in_channel") if isinstance(payload, dict) else None
+            )
+            if not isinstance(record_channel, str):
+                continue
+            if not (
+                record_channel == in_channel_prefix
+                or record_channel.startswith(in_channel_prefix + "/")
+            ):
+                continue
+
+            detailed_path = self._detailed_path_for_record_path(core_path)
+            if detailed_path.exists():
+                detailed_files.append(detailed_path)
+
+        return detailed_files
+
+    def search_by_keywords(
+        self,
+        *,
+        files: list[Path],
+        pattern: str,
+        n: int,
+        first_match_per_file: bool = False,
+    ) -> FileMatches:
+        """Search `files` with `rg` and return stage_a-style grouped matches.
+
+        Args:
+            files: Candidate detailed files to scan.
+            pattern: Regex pattern passed directly to `rg`.
+            n: Keep only the last `n` files in sorted path order. For each kept
+                file, keep at most the last `n` matched lines.
+            first_match_per_file: If true, ask `rg` to keep only one match per
+                file (`--max-count 1`), mirroring stage_a's `user` route.
+        """
+
+        if n <= 0 or not files:
+            return []
+
+        args = ["rg", "--with-filename", "--line-number", "--no-heading"]
+        if first_match_per_file:
+            args.extend(["--max-count", "1"])
+        args.append(pattern)
+        args.extend(str(path) for path in files)
+
+        try:
+            res = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return []
+
+        if res.returncode not in (0, 1):
+            return []
+
+        grouped: dict[Path, list[LineMatch]] = {}
+        for path, line_no, text in _parse_rg_lines_with_numbers(res.stdout):
+            grouped.setdefault(path, []).append((line_no, text))
+
+        selected_paths = sorted(grouped.keys())[-n:]
+        selected: FileMatches = []
+        for path in selected_paths:
+            matches = grouped[path]
+            if first_match_per_file:
+                selected.append((path, matches[:1]))
+            else:
+                selected.append((path, matches[-n:]))
+        return selected
+
     def append(self, record: MemoryRecord) -> None:
         self._load_if_needed()
 
@@ -533,10 +672,10 @@ class FolderMemoryStore(MemoryStore):
         for parent in updated_parents:
             self._persist_record(parent)
 
-        record_path = self._persist_record(record)
-        self._append_order_line(record, record_path)
+        self._persist_record(record)
 
         self._records.append(record)
+        self._records.sort(key=lambda r: r.id_)
         self._by_id[record.id_] = record
         self._cache_key = self._stat_key()
 
@@ -544,7 +683,7 @@ class FolderMemoryStore(MemoryStore):
         """Return the sibling detailed path for a record path.
 
         The record path may be the canonical `<id>.core.json` file or a legacy
-        `<id>.json` file referenced by old `order.jsonl` entries.
+        `<id>.json` file.
         """
 
         name = record_path.name
@@ -566,55 +705,20 @@ class FolderMemoryStore(MemoryStore):
             self._record_paths = {}
             return
 
-        order_path = self._order_path()
-        if not order_path.exists():
-            self._rebuild_order_from_records()
-
         key = self._stat_key()
-        if key is None:
-            self._cache_key = None
-            self._records = []
-            self._by_id = {}
-            self._record_paths = {}
-            return
-
         if self._cache_key is not None and key == self._cache_key:
             return
-
-        order_entries = _read_order_file(self._order_path(), encoding=self.encoding)
 
         records: list[MemoryRecord] = []
         by_id: dict[str, MemoryRecord] = {}
         record_paths: dict[str, Path] = {}
-        missing_record_ids: set[str] = set()
-        for entry in order_entries:
-            record_path = self._resolve_record_path(entry)
-            if not record_path.exists():
-                # Backward compatibility for relpaths written before the
-                # "<id>.core.json" convention.
-                if record_path.name.endswith(".core.json"):
-                    legacy = record_path.with_name(
-                        record_path.name[: -len(".core.json")] + ".json"
-                    )
-                    if legacy.exists():
-                        record_path = legacy
-                elif record_path.name.endswith(
-                    ".json"
-                ) and not record_path.name.endswith(
-                    (".detailed.json", ".detailed.jsonl")
-                ):
-                    core = record_path.with_name(
-                        record_path.name[: -len(".json")] + ".core.json"
-                    )
-                    if core.exists():
-                        record_path = core
+        for record_path in self._list_loadable_record_paths():
             try:
                 raw = record_path.read_text(encoding=self.encoding)
-            except FileNotFoundError:
-                # Deleted records are tolerated. We repair links around them
-                # after loading all existing records.
-                missing_record_ids.add(entry.id_)
-                continue
+            except OSError as e:
+                raise ValueError(
+                    f"Failed to read MemoryRecord at {record_path}: {e}"
+                ) from e
             try:
                 record = _load_memory_record_from_disk(
                     record_path,
@@ -629,54 +733,47 @@ class FolderMemoryStore(MemoryStore):
             except ValueError as e:
                 raise ValueError(f"{e}") from e
 
-            if record.id_ != entry.id_:
+            expected_id = self._expected_id_for_record_path(record_path)
+            if record.id_ != expected_id:
                 raise ValueError(
-                    f"Record id mismatch at {record_path}: expected {entry.id_}, got {record.id_}"
+                    f"Record id mismatch at {record_path}: expected {expected_id}, got {record.id_}"
                 )
             if record.id_ in by_id:
+                existing_path = record_paths[record.id_]
                 raise ValueError(
-                    f"Duplicate MemoryRecord id in order file: {record.id_}"
+                    f"Duplicate MemoryRecord id on disk: {record.id_} ({existing_path}, {record_path})"
                 )
 
             records.append(record)
             by_id[record.id_] = record
             record_paths[record.id_] = record_path
 
+        records.sort(key=lambda record: record.id_)
         repaired_record_ids = self._repair_missing_links(
             records=records,
             by_id=by_id,
-            missing_record_ids=missing_record_ids,
+            missing_record_ids=set(),
         )
 
-        if missing_record_ids or repaired_record_ids:
+        if repaired_record_ids:
             self._record_paths = dict(record_paths)
-            record_order = {record.id_: idx for idx, record in enumerate(records)}
-            for record_id in sorted(
-                repaired_record_ids, key=lambda id_: record_order[id_]
-            ):
+            for record_id in sorted(repaired_record_ids):
                 record_paths[record_id] = self._persist_record(by_id[record_id])
-            self._persist_order(self._order_entries_for_records(records, record_paths))
-            key = self._stat_key() or key
+            key = self._stat_key()
 
         self._records = records
         self._by_id = by_id
         self._record_paths = record_paths
         self._cache_key = key
 
-    def _rebuild_order_from_records(self) -> None:
+    def _list_loadable_record_paths(self) -> list[Path]:
         records_dir = self._records_dir()
         if not records_dir.exists():
-            self.root.mkdir(parents=True, exist_ok=True)
-            self._persist_order([])
-            return
+            return []
 
-        indexed: list[tuple[str, datetime, str]] = []
+        paths: list[Path] = []
         for path in records_dir.rglob("*.json"):
-            if path.name.endswith(".detailed.json"):
-                continue
-            if path.name.endswith(".detailed.jsonl"):
-                continue
-            if path.name.endswith(".compacted.json"):
+            if not _is_loadable_record_file(path):
                 continue
             if (
                 path.name.endswith(".json")
@@ -686,38 +783,48 @@ class FolderMemoryStore(MemoryStore):
                 # If both legacy "<id>.json" and "<id>.core.json" exist, the core
                 # file is authoritative.
                 continue
-            try:
-                raw = path.read_text(encoding=self.encoding)
-            except OSError as e:
-                raise ValueError(f"Failed to read MemoryRecord at {path}: {e}") from e
-            try:
-                record_id, created_at = _read_record_id_and_created_at(raw, path=path)
-            except ValueError as e:
-                raise ValueError(f"{e}") from e
-            indexed.append((record_id, created_at, str(path.relative_to(self.root))))
+            paths.append(path)
+        paths.sort(key=lambda p: str(p.relative_to(self.root)))
+        return paths
 
-        # Stable order for rebuilds: by normalized timestamp then id.
-        indexed.sort(key=lambda t: (datetime_to_posix_millis(t[1]), str(t[0])))
-        self._persist_order(
-            [
-                _OrderEntry(
-                    id_=record_id,
-                    created_at=created_at,
-                    relpath=relpath,
-                )
-                for record_id, created_at, relpath in indexed
-            ]
-        )
+    def _expected_id_for_record_path(self, path: Path) -> str:
+        name = path.name
+        if name.endswith(".core.json"):
+            raw_id = name[: -len(".core.json")]
+        elif name.endswith(".json"):
+            raw_id = name[: -len(".json")]
+        else:
+            raise ValueError(f"Unexpected record filename: {path}")
+        try:
+            return coerce_record_id(raw_id)
+        except ValueError as e:
+            raise ValueError(f"Invalid record filename at {path}: {raw_id!r}") from e
 
     def _stat_key(self) -> _CacheKey | None:
-        try:
-            stat = self._order_path().stat()
-        except FileNotFoundError:
+        if not self.root.exists():
             return None
-        return _CacheKey(mtime_ns=stat.st_mtime_ns, size=stat.st_size)
 
-    def _order_path(self) -> Path:
-        return self.root / "order.jsonl"
+        records_dir = self._records_dir()
+        if not records_dir.exists():
+            return _CacheKey(file_stats=tuple())
+
+        stats: list[tuple[str, int, int]] = []
+        for path in records_dir.rglob("*"):
+            if not path.is_file() or not _is_record_related_file(path):
+                continue
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            stats.append(
+                (
+                    str(path.relative_to(self.root)),
+                    stat.st_mtime_ns,
+                    stat.st_size,
+                )
+            )
+        stats.sort(key=lambda item: item[0])
+        return _CacheKey(file_stats=tuple(stats))
 
     def _records_dir(self) -> Path:
         return self.root / "records"
@@ -846,50 +953,6 @@ class FolderMemoryStore(MemoryStore):
 
         return repaired
 
-    def _order_entries_for_records(
-        self,
-        records: list[MemoryRecord],
-        record_paths: dict[str, Path],
-    ) -> list[_OrderEntry]:
-        """Build order entries in current in-memory append order."""
-
-        entries: list[_OrderEntry] = []
-        for record in records:
-            record_path = record_paths.get(record.id_)
-            if record_path is None:
-                record_path = self._record_path_for(record)
-            entries.append(
-                _OrderEntry(
-                    id_=record.id_,
-                    created_at=record.created_at,
-                    relpath=str(record_path.relative_to(self.root)),
-                )
-            )
-        return entries
-
-    def _persist_order(self, entries: list[_OrderEntry]) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        order_path = self._order_path()
-        lines: list[str] = []
-        for entry in entries:
-            payload = {
-                "id": str(entry.id_),
-                "created_at": entry.created_at.isoformat(),
-                "relpath": entry.relpath,
-            }
-            lines.append(json.dumps(payload))
-        self._atomic_write_text(order_path, "\n".join(lines) + ("\n" if lines else ""))
-
-    def _append_order_line(self, record: MemoryRecord, record_path: Path) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        with self._order_path().open("a", encoding=self.encoding) as f:
-            payload = {
-                "id": str(record.id_),
-                "created_at": record.created_at.isoformat(),
-                "relpath": str(record_path.relative_to(self.root)),
-            }
-            f.write(json.dumps(payload) + "\n")
-
     def _coerce_record(self, record: MemoryRecordRef) -> MemoryRecord:
         if isinstance(record, MemoryRecord):
             return record
@@ -898,65 +961,6 @@ class FolderMemoryStore(MemoryStore):
         if rec is None:
             raise KeyError(f"Unknown MemoryRecord id: {record_id}")
         return rec
-
-    def _resolve_record_path(self, entry: _OrderEntry) -> Path:
-        relpath = Path(entry.relpath)
-        if relpath.is_absolute() or ".." in relpath.parts:
-            raise ValueError(f"Invalid relpath in order.jsonl: {entry.relpath!r}")
-        return self.root / relpath
-
-
-def _read_order_file(path: Path, *, encoding: str) -> list[_OrderEntry]:
-    entries: list[_OrderEntry] = []
-    with path.open("r", encoding=encoding) as f:
-        for line_no, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                decoded = json.loads(line)
-            except ValueError as e:
-                raise ValueError(f"Invalid JSON at {path}:{line_no}: {e}") from e
-
-            if not isinstance(decoded, dict):
-                raise ValueError(
-                    f"Invalid order entry at {path}:{line_no}: expected object, got {decoded!r}"
-                )
-
-            raw_id = decoded.get("id")
-            if not isinstance(raw_id, str):
-                raise ValueError(
-                    f"Invalid order entry at {path}:{line_no}: missing/invalid 'id'"
-                )
-            try:
-                record_id = coerce_record_id(raw_id)
-            except ValueError as e:
-                raise ValueError(
-                    f"Invalid record id at {path}:{line_no}: {raw_id!r}"
-                ) from e
-
-            raw_created_at = decoded.get("created_at")
-            if not isinstance(raw_created_at, str):
-                raise ValueError(
-                    f"Invalid order entry at {path}:{line_no}: missing/invalid 'created_at'"
-                )
-            try:
-                created_at = datetime.fromisoformat(raw_created_at)
-            except ValueError as e:
-                raise ValueError(
-                    f"Invalid created_at at {path}:{line_no}: {raw_created_at!r}"
-                ) from e
-
-            relpath = decoded.get("relpath")
-            if not isinstance(relpath, str):
-                raise ValueError(
-                    f"Invalid order entry at {path}:{line_no}: missing/invalid 'relpath'"
-                )
-
-            entries.append(
-                _OrderEntry(id_=record_id, created_at=created_at, relpath=relpath)
-            )
-    return entries
 
 
 def _in_datetime_range(

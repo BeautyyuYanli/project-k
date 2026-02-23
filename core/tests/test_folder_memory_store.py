@@ -25,7 +25,6 @@ def test_folder_store_get_latest_and_get_by_id(tmp_path) -> None:
 
     r1_path = root / "records" / "2026" / "01" / "01" / "00" / f"{r1.id_}.core.json"
     assert r1_path.exists()
-    assert (root / "order.jsonl").exists()
     core_payload = json.loads(r1_path.read_text(encoding="utf-8"))
     assert core_payload["in_channel"] == "test"
     assert core_payload["out_channel"] is None
@@ -219,10 +218,7 @@ def test_folder_store_repairs_links_when_middle_record_missing(tmp_path) -> None
     assert repaired.get_by_id(parent.id_) is None
     assert repaired.get_children(grandparent.id_) == [child.id_]
     assert repaired.get_parents(child.id_) == [grandparent.id_]
-
-    order_lines = (root / "order.jsonl").read_text(encoding="utf-8").splitlines()
-    order_ids = [json.loads(line)["id"] for line in order_lines if line.strip()]
-    assert order_ids == [grandparent.id_, child.id_]
+    assert not (root / "order.jsonl").exists()
 
 
 def test_folder_store_get_between(tmp_path) -> None:
@@ -329,7 +325,38 @@ def test_folder_store_auto_refreshes_on_external_append(tmp_path) -> None:
     assert store.get_latest() == r2.id_
 
 
-def test_folder_store_rebuild_order_ignores_detailed_files(tmp_path) -> None:
+def test_folder_store_order_is_lexicographic_by_id(tmp_path) -> None:
+    root = tmp_path / "mem"
+    store = FolderMemoryStore(root)
+
+    high_id = MemoryRecord(
+        in_channel="test",
+        input="high",
+        compacted=[],
+        output="",
+        detailed=[],
+        created_at=datetime(2026, 1, 1, 0, 0, 0),
+        id_="zzzzzzzz",
+    )
+    low_id = MemoryRecord(
+        in_channel="test",
+        input="low",
+        compacted=[],
+        output="",
+        detailed=[],
+        created_at=datetime(2026, 1, 1, 0, 0, 0),
+        id_="--------",
+    )
+
+    store.append(high_id)
+    store.append(low_id)
+    store.refresh()
+
+    # Latest is lexicographic max id, not append order.
+    assert store.get_latest() == high_id.id_
+
+
+def test_folder_store_scan_ignores_detailed_files(tmp_path) -> None:
     root = tmp_path / "mem"
     store = FolderMemoryStore(root)
 
@@ -343,10 +370,94 @@ def test_folder_store_rebuild_order_ignores_detailed_files(tmp_path) -> None:
     )
     store.append(r1)
 
-    # Simulate a missing index file; the store should rebuild the order from
-    # record files without treating `*.detailed.jsonl` as a record file.
-    (root / "order.jsonl").unlink()
+    # Ensure detailed-only files are ignored when scanning for records.
+    detailed_json = (
+        root / "records" / "2026" / "01" / "01" / "00" / f"{r1.id_}.detailed.json"
+    )
+    detailed_json.write_text('{"not":"a record"}\n', encoding="utf-8")
 
     rebuilt = FolderMemoryStore(root)
     assert rebuilt.get_latest() == r1.id_
     assert rebuilt.get_by_id(r1.id_) == r1
+
+
+def test_folder_store_filter_by_in_channel(tmp_path) -> None:
+    root = tmp_path / "mem"
+    store = FolderMemoryStore(root)
+
+    r1 = MemoryRecord(
+        in_channel="telegram/chat/-1001/thread/10",
+        input="r1",
+        output="",
+        id_="--------",
+        created_at=datetime(2026, 1, 1, 0, 0, 0),
+    )
+    r2 = MemoryRecord(
+        in_channel="telegram/chat/-1001/thread/11",
+        input="r2",
+        output="",
+        id_="-------0",
+        created_at=datetime(2026, 1, 1, 0, 0, 0),
+    )
+    r3 = MemoryRecord(
+        in_channel="discord/channel/1",
+        input="r3",
+        output="",
+        id_="-------1",
+        created_at=datetime(2026, 1, 1, 0, 0, 0),
+    )
+    store.append(r1)
+    store.append(r2)
+    store.append(r3)
+
+    files = store.filter_by_in_channel(in_channel_prefix="telegram/chat/-1001")
+    file_ids = [p.name.removesuffix(".detailed.jsonl") for p in files]
+
+    assert file_ids == [r1.id_, r2.id_]
+
+
+def test_folder_store_search_by_keywords(tmp_path) -> None:
+    root = tmp_path / "mem"
+    store = FolderMemoryStore(root)
+
+    low = MemoryRecord(
+        in_channel="telegram/chat/-1001/thread/10",
+        input="needle-low",
+        output="",
+        id_="--------",
+        created_at=datetime(2026, 1, 1, 0, 0, 0),
+    )
+    high = MemoryRecord(
+        in_channel="telegram/chat/-1001/thread/10",
+        input="x",
+        output="needle-high",
+        id_="zzzzzzzz",
+        created_at=datetime(2026, 1, 1, 0, 0, 0),
+    )
+    store.append(low)
+    store.append(high)
+
+    files = store.filter_by_in_channel(
+        in_channel_prefix="telegram/chat/-1001/thread/10"
+    )
+    matches = store.search_by_keywords(
+        files=files,
+        pattern="needle",
+        n=2,
+    )
+
+    assert [p.name.removesuffix(".detailed.jsonl") for p, _ in matches] == [
+        low.id_,
+        high.id_,
+    ]
+    assert all(line_matches for _, line_matches in matches)
+
+    latest_only = store.search_by_keywords(
+        files=files,
+        pattern="needle",
+        n=1,
+        first_match_per_file=True,
+    )
+    assert len(latest_only) == 1
+    assert latest_only[0][0].name.removesuffix(".detailed.jsonl") == high.id_
+    assert len(latest_only[0][1]) == 1

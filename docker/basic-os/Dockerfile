@@ -32,7 +32,7 @@ WORKDIR /
 # Compose files mount these paths for live dev, so keep install paths stable.
 COPY core/ /core/
 COPY collections/ /collections/
-RUN uv pip install --system --no-cache -e /core -e /collections
+RUN uv pip install --system --no-cache -e /core -e /collections typer
 
 COPY docker/basic-os/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY docker/basic-os/supervisord.conf /etc/supervisor/conf.d/supervisord.conf

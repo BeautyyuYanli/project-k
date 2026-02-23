@@ -1,34 +1,32 @@
-#!/usr/bin/env -S uv run --script --quiet
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#     "typer",
-# ]
-# ///
+#!/usr/bin/env python3
 
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
-from typing import Optional, Annotated
+from typing import Annotated, Optional
 
 import typer
 
 app = typer.Typer(add_completion=False)
 
 
-def _channel_has_prefix(*, channel: str, prefix: str) -> bool:
-    return channel == prefix or channel.startswith(prefix + "/")
+def _ensure_core_src_on_sys_path() -> None:
+    """Make `core/src` importable when this script is run from a repo checkout."""
+
+    for parent in Path(__file__).resolve().parents:
+        core_src = parent / "core" / "src"
+        if core_src.is_dir():
+            sys.path.insert(0, str(core_src))
+            return
 
 
-def _record_in_channel(payload: object) -> str | None:
-    if not isinstance(payload, dict):
-        return None
+_ensure_core_src_on_sys_path()
 
-    in_channel = payload.get("in_channel")
-    if isinstance(in_channel, str):
-        return in_channel
-    return None
+from k.agent.memory.folder import FolderMemoryStore
+from k.agent.memory.paths import memory_records_root_from_config_base
+from k.config import Config
 
 
 def _infer_chat_id_from_channel(in_channel: str) -> str | None:
@@ -46,57 +44,6 @@ def _validate_channel_path(name: str, value: str) -> str:
     if channel.startswith("/") or channel.endswith("/") or "//" in channel:
         raise ValueError(f"Invalid {name}: {value!r}")
     return channel
-
-
-def get_detailed_files(root: Path, *, in_channel_prefix: str) -> list[Path]:
-    """Find detailed files whose core record `in_channel` matches a prefix."""
-
-    root_segment = in_channel_prefix.split("/", 1)[0]
-    root_pattern = re.escape(root_segment)
-    grep_pattern = rf'"in_channel"\s*:\s*"{root_pattern}(?:/|")'
-
-    try:
-        res = subprocess.run(
-            [
-                "rg",
-                "-l",
-                "--sort",
-                "path",
-                "-g",
-                "*.core.json",
-                grep_pattern,
-                str(root),
-            ],
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return []
-
-    if res.returncode not in (0, 1):
-        return []
-
-    core_files = [line for line in res.stdout.splitlines() if line]
-    detailed_files = []
-    for cf in core_files:
-        core_path = Path(cf)
-        try:
-            payload = json.loads(core_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-
-        record_channel = _record_in_channel(payload)
-        if record_channel is None:
-            continue
-        if not _channel_has_prefix(channel=record_channel, prefix=in_channel_prefix):
-            continue
-
-        df = core_path.parent / (
-            core_path.name.removesuffix(".core.json") + ".detailed.jsonl"
-        )
-        if df.exists():
-            detailed_files.append(df)
-    return detailed_files
 
 
 LineMatch = tuple[int, str]
@@ -120,14 +67,17 @@ def _parse_rg_lines_with_numbers(output: str) -> list[tuple[Path, int, str]]:
         parsed.append((Path(path_s), line_no, text))
     return parsed
 
-def search_files_first_match_per_file(files: list[Path], pattern: str, n: int) -> FileMatches:
+
+def search_files_first_match_per_file(
+    files: list[Path], pattern: str, n: int
+) -> FileMatches:
     """Search files for `pattern`, keeping the last N files (sorted by path).
 
     For each returned file, only the first match (line number + line) is kept.
     """
     if not files:
         return []
-    
+
     file_args = [str(f) for f in files]
     res = subprocess.run(
         [
@@ -150,33 +100,6 @@ def search_files_first_match_per_file(files: list[Path], pattern: str, n: int) -
         grouped[path] = [(line_no, text)]
 
     selected = sorted(grouped.items(), key=lambda x: x[0])[-n:]
-    return selected
-
-def search_files_all_matches_grouped(files: list[Path], pattern: str, n: int) -> FileMatches:
-    """Search files for `pattern`, keeping the last N files (sorted by path).
-
-    For each returned file, up to the last N matched lines are kept (so the kw
-    route can report multiple matches within the same memory record).
-    """
-    if not files:
-        return []
-
-    file_args = [str(f) for f in files]
-    res = subprocess.run(
-        ["rg", "--with-filename", "--line-number", "--no-heading", pattern] + file_args,
-        capture_output=True,
-        text=True,
-    )
-    if res.returncode not in (0, 1):  # 1 = no matches, 2 = rg error
-        return []
-    grouped: dict[Path, list[LineMatch]] = {}
-    for path, line_no, text in _parse_rg_lines_with_numbers(res.stdout):
-        grouped.setdefault(path, []).append((line_no, text))
-
-    selected_paths = sorted(grouped.keys())[-n:]
-    selected: FileMatches = []
-    for path in selected_paths:
-        selected.append((path, grouped[path][-n:]))
     return selected
 
 
@@ -249,9 +172,6 @@ def main(
         Optional[str], typer.Option(help="Sender id (defaults to channel chat id)")
     ] = None,
     kw: Annotated[Optional[str], typer.Option(help="Regex for extra narrowing")] = None,
-    root: Annotated[Path, typer.Option(help="Memories root")] = (
-        Path.home() / ".kapybara" / "memories" / "records"
-    ),
     n: Annotated[int, typer.Option(help="Lines kept per route")] = 6,
     out: Annotated[
         Optional[Path],
@@ -288,15 +208,19 @@ def main(
         raise typer.Exit(code=2)
 
     out_path = out.expanduser()
+    records_root = memory_records_root_from_config_base(Config().config_base)
+    store = FolderMemoryStore(records_root.parent)
     channel_root = in_channel.split("/", 1)[0]
 
     try:
         with _OutputWriter(out_path=out_path) as w:
-            detailed_files = get_detailed_files(root, in_channel_prefix=in_channel)
+            detailed_files = store.filter_by_in_channel(in_channel_prefix=in_channel)
             # The user route intentionally searches across the same channel root
             # (e.g. all `telegram/*` records), not only the current in_channel
             # subtree. This keeps per-user recall available in thread channels.
-            user_scope_files = get_detailed_files(root, in_channel_prefix=channel_root)
+            user_scope_files = store.filter_by_in_channel(
+                in_channel_prefix=channel_root
+            )
             matches_channel: FileMatches = [
                 (path, []) for path in sorted(detailed_files)[-n:]
             ]
@@ -309,34 +233,45 @@ def main(
                     user_scope_files, from_re, n
                 )
 
-            matches_kw = []
+            matches_kw: FileMatches = []
             if kw:
-                matches_kw = search_files_all_matches_grouped(detailed_files, kw, n)
+                matches_kw = store.search_by_keywords(
+                    files=detailed_files,
+                    pattern=kw,
+                    n=n,
+                )
 
             # Collect results
-            results = {} # id -> {routes: set, core_json: str, matched_detailed_lines: list[dict]}
-            
+            results: dict[str, dict[str, object]] = {}
+
             def add_match(match_list: FileMatches, route_name: str) -> None:
                 for path, line_matches in match_list:
                     # Map detailed.jsonl back to core.json
-                    core_path = path.parent / (path.name.removesuffix(".detailed.jsonl") + ".core.json")
-                    if not core_path.exists(): continue
-                    
+                    core_path = path.parent / (
+                        path.name.removesuffix(".detailed.jsonl") + ".core.json"
+                    )
+                    if not core_path.exists():
+                        continue
+
                     mem_id = core_path.name.removesuffix(".core.json")
                     if mem_id not in results:
                         results[mem_id] = {
                             "routes": {route_name},
                             "core_json": core_path.read_text().strip(),
-                            "matched_detailed_lines": []
+                            "matched_detailed_lines": [],
                         }
                     else:
-                        results[mem_id]["routes"].add(route_name)
+                        routes = results[mem_id].get("routes")
+                        if isinstance(routes, set):
+                            routes.add(route_name)
 
-                    # Only the kw route is treated as a "content match" worth surfacing
-                    # in the main TSV output; channel/user routes are candidate finding.
+                    # Only the kw route is treated as a "content match" worth
+                    # surfacing in the main TSV output; channel/user routes are
+                    # candidate finding.
                     if route_name == "kw" and line_matches:
                         results[mem_id]["matched_detailed_lines"] = [
-                            {"line": line_no, "text": text} for line_no, text in line_matches
+                            {"line": line_no, "text": text}
+                            for line_no, text in line_matches
                         ]
 
             add_match(matches_channel, "channel")
@@ -359,9 +294,14 @@ def main(
             w.line("# id\troutes\tcore_json\tmatched_detailed_lines")
             for mem_id in sorted(results.keys()):
                 data = results[mem_id]
-                routes_str = ",".join(sorted(data["routes"]))
-                matched = json.dumps(data["matched_detailed_lines"], ensure_ascii=False)
-                w.line(f"{mem_id}\t{routes_str}\t{data['core_json']}\t{matched}")
+                routes_obj = data.get("routes", set())
+                routes = routes_obj if isinstance(routes_obj, set) else set()
+                routes_str = ",".join(sorted(str(route) for route in routes))
+                matched = json.dumps(
+                    data.get("matched_detailed_lines", []), ensure_ascii=False
+                )
+                core_json = str(data.get("core_json", ""))
+                w.line(f"{mem_id}\t{routes_str}\t{core_json}\t{matched}")
     except FileExistsError:
         typer.echo(f"Error: output file already exists: {out_path}", err=True)
         typer.echo(
@@ -374,6 +314,7 @@ def main(
         f"Output saved to: {out_path} (channel={in_channel}, candidates: {len(results)})",
         err=True,
     )
+
 
 if __name__ == "__main__":
     app()

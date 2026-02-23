@@ -56,7 +56,6 @@ def _write_record(
 def _run_stage_a(
     *,
     home: Path,
-    records_root: Path | None,
     in_channel: str,
     from_id: int,
     out_path: Path,
@@ -72,8 +71,6 @@ def _run_stage_a(
         "--out",
         str(out_path),
     ]
-    if records_root is not None:
-        cmd.extend(["--root", str(records_root)])
     env = os.environ.copy()
     env["HOME"] = str(home)
     return subprocess.run(
@@ -107,7 +104,7 @@ def test_stage_a_user_route_is_cross_in_channel_for_thread_inputs(
 ) -> None:
     home = tmp_path / "home"
     home.mkdir()
-    records_root = tmp_path / "records"
+    records_root = home / ".kapybara" / "memories" / "records"
 
     _write_record(
         root=records_root,
@@ -137,7 +134,6 @@ def test_stage_a_user_route_is_cross_in_channel_for_thread_inputs(
     out_path = tmp_path / "stage_a.tsv"
     proc = _run_stage_a(
         home=home,
-        records_root=records_root,
         in_channel="telegram/chat/-1001/thread/10",
         from_id=567113516,
         out_path=out_path,
@@ -172,7 +168,6 @@ def test_stage_a_default_root_uses_home_kapybara_memories_records(
     out_path = tmp_path / "stage_a.tsv"
     proc = _run_stage_a(
         home=home,
-        records_root=None,
         in_channel="telegram/chat/-1001/thread/10",
         from_id=567113516,
         out_path=out_path,
@@ -186,8 +181,8 @@ def test_stage_a_default_root_uses_home_kapybara_memories_records(
 def test_stage_a_emits_by_user_preference_only(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
-    records_root = tmp_path / "records"
-    records_root.mkdir()
+    records_root = home / ".kapybara" / "memories" / "records"
+    records_root.mkdir(parents=True)
 
     preferences_root = home / ".kapybara" / "preferences"
     preferences_root.mkdir(parents=True)
@@ -208,7 +203,6 @@ def test_stage_a_emits_by_user_preference_only(tmp_path: Path) -> None:
     out_path = tmp_path / "stage_a.tsv"
     proc = _run_stage_a(
         home=home,
-        records_root=records_root,
         in_channel="telegram/chat/-1001/thread/10",
         from_id=567113516,
         out_path=out_path,

@@ -26,7 +26,6 @@ Hard requirement:
   --in-channel <exact_current_input_in_channel> \
   [--from-id <from_id>] \
   [--kw <regex>] \
-  [--root <dir>] \
   [--n <N>] \
   --out <file>
 ```
@@ -34,6 +33,7 @@ Hard requirement:
 Notes:
 - `--in-channel` is not "any matching prefix"; provide the full current-input
   channel string as-is.
+- Records are always read from `Config().config_base/memories/records`.
 - The script records ripgrep match line numbers so you can jump to the exact `.detailed.jsonl` line.
 - `--n` controls how many lines are kept per route (channel / user / kw). Default: `6`.
 - Prefix matching is subtree-aware: `telegram/chat/<chat_id>` matches all

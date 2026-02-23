@@ -14,3 +14,9 @@ def memory_root_from_config_base(config_base: str | Path) -> Path:
     """Return the FolderMemoryStore root directory under `config_base`."""
 
     return Path(config_base).expanduser().resolve() / "memories"
+
+
+def memory_records_root_from_config_base(config_base: str | Path) -> Path:
+    """Return the records directory under the FolderMemoryStore root."""
+
+    return memory_root_from_config_base(config_base) / "records"
