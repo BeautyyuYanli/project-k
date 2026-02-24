@@ -1,30 +1,133 @@
 #!/usr/bin/env -S uv run --script --quiet
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["aiohttp", "tqdm"]
+# dependencies = ["httpx", "pydantic", "uvloop"]
 # ///
 
-"""Fetch URLs via Jina Reader and mirror stdout to a required output file.
+"""Fetch one or more URLs via Jina Reader and persist full output under `/tmp`.
 
-`--out` must be a unique path. The script refuses to overwrite existing files to
-avoid races across concurrent tool invocations.
+This script keeps stdout compact for better tool UX while writing complete
+results to files:
+- Caller must provide a unique `--out-dir` under `/tmp` for each invocation.
+- URL bodies are written to per-item text files.
+- Run metadata is printed to stdout; no separate run manifest file is written.
+- Multiple URLs are fetched concurrently via `httpx.AsyncClient`.
+- Async execution runs on `uvloop` for lower scheduling overhead.
 """
 
-from __future__ import annotations
-
+import argparse
 import asyncio
+import json
 import os
 import sys
-import argparse
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Coroutine, TypeVar
+
+import httpx
+from pydantic import BaseModel, ConfigDict
 
 
-def _write_stdout_and_file(output: str, out_path: str) -> None:
-    """Write exactly the same text to a file and stdout."""
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(output)
-    sys.stdout.write(output)
+TMP_ROOT = Path("/tmp").resolve()
+DEFAULT_CONCURRENCY = 32
+REQUEST_TIMEOUT_SECONDS = 60.0
+T = TypeVar("T")
 
-async def fetch_url(session: aiohttp.ClientSession, target: str, jina_key: str, use_browser: bool = True) -> str:
+
+class FetchResult(BaseModel):
+    """Normalized fetch outcome for one URL request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    ok: bool
+    content: str
+    http_status: int | None
+    error: str | None
+    used_browser: bool
+
+
+class FetchManifestRow(BaseModel):
+    """One row in persisted manifest for a fetched URL."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    index: int
+    url: str
+    status: str
+    http_status: int | None = None
+    chars: int
+    used_browser: bool = False
+    error: str | None = None
+    content_path: str | None = None
+
+
+class FetchManifest(BaseModel):
+    """Run metadata structure emitted to stdout for one fetch run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    generated_at: str
+    output_dir: str
+    content_dir: str
+    total_urls: int
+    ok_count: int
+    error_count: int
+    results: list[FetchManifestRow]
+
+
+def _utc_now_iso() -> str:
+    """Return a UTC timestamp in ISO 8601 format."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _dump_model(payload: BaseModel | dict[str, object]) -> str:
+    """Serialize a pydantic model (or plain dict) as pretty JSON text."""
+    data = payload.model_dump(exclude_none=True) if isinstance(payload, BaseModel) else payload
+    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+
+
+def _write_text_file(path: Path, content: str) -> None:
+    """Write text content to disk, creating parent directories."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _assert_tmp_path(path: Path, label: str) -> None:
+    """Ensure a filesystem path resolves inside `/tmp`."""
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(TMP_ROOT)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be under /tmp: {path}") from exc
+
+
+def _prepare_output_dir(out_dir: str) -> Path:
+    """Validate and create a unique output directory under `/tmp`."""
+    output_dir = Path(out_dir).expanduser().resolve()
+    _assert_tmp_path(output_dir, "Output directory")
+    if output_dir.exists():
+        raise ValueError(
+            f"Output directory already exists: {output_dir}. "
+            "Use a unique --out-dir path to avoid concurrent run conflicts."
+        )
+    output_dir.mkdir(parents=True, exist_ok=False)
+    return output_dir
+
+
+def _content_dir_from_output_dir(output_dir: Path) -> Path:
+    """Return the per-run content directory under the unique output directory."""
+    return output_dir / "contents"
+
+
+async def _fetch_url(
+    client: httpx.AsyncClient,
+    target: str,
+    jina_key: str,
+    use_browser: bool = True,
+) -> FetchResult:
+    """Fetch one URL, retrying once without browser mode when non-200."""
     url = f"https://r.jina.ai/{target}"
     headers = {
         "Authorization": f"Bearer {jina_key}",
@@ -34,24 +137,149 @@ async def fetch_url(session: aiohttp.ClientSession, target: str, jina_key: str, 
         headers["X-Experimental"] = "browser"
 
     try:
-        async with session.get(url, headers=headers, timeout=60) as response:
-            if response.status == 200:
-                return await response.text()
-            elif use_browser:
-                return await fetch_url(session, target, jina_key, use_browser=False)
-            else:
-                return f"Error: {response.status} for {target}"
-    except Exception as e:
-        return f"Error: {str(e)} for {target}"
+        response = await client.get(
+            url,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            follow_redirects=True,
+        )
+        if response.status_code == 200:
+            return FetchResult(
+                url=target,
+                ok=True,
+                content=response.text,
+                http_status=200,
+                error=None,
+                used_browser=use_browser,
+            )
+        if use_browser:
+            return await _fetch_url(
+                client=client,
+                target=target,
+                jina_key=jina_key,
+                use_browser=False,
+            )
+        return FetchResult(
+            url=target,
+            ok=False,
+            content="",
+            http_status=response.status_code,
+            error=f"HTTP {response.status_code}",
+            used_browser=False,
+        )
+    except Exception as exc:
+        return FetchResult(
+            url=target,
+            ok=False,
+            content="",
+            http_status=None,
+            error=str(exc),
+            used_browser=use_browser,
+        )
 
-async def main():
-    parser = argparse.ArgumentParser(description="Fetch one or more URLs via Jina Reader")
+
+async def _fetch_urls(
+    urls: list[str],
+    jina_key: str,
+) -> list[FetchResult]:
+    """Fetch all URLs concurrently with fixed internal concurrency control."""
+    semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY)
+    async with httpx.AsyncClient() as client:
+        async def bounded(target: str) -> FetchResult:
+            async with semaphore:
+                return await _fetch_url(client, target, jina_key, use_browser=True)
+
+        tasks = [asyncio.create_task(bounded(url)) for url in urls]
+        return await asyncio.gather(*tasks)
+
+
+def _content_path(content_dir: Path, index: int) -> Path:
+    """Return the file path used for one URL content body."""
+    return content_dir / f"item_{index:03d}.txt"
+
+
+def _stdout_summary(manifest: FetchManifest | dict[str, object]) -> str:
+    """Render full run metadata to stdout without external manifest files."""
+    manifest_obj = (
+        manifest
+        if isinstance(manifest, FetchManifest)
+        else FetchManifest.model_validate(manifest)
+    )
+    return _dump_model(manifest_obj)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Create CLI parser for fetch batch mode."""
+    parser = argparse.ArgumentParser(
+        description="Fetch one or more URLs via Jina Reader",
+        allow_abbrev=False,
+    )
     parser.add_argument("urls", nargs="+", help="URLs to fetch")
     parser.add_argument(
-        "--out",
+        "--out-dir",
         required=True,
-        help="Output file path (must be unique to avoid races)",
+        help="Unique output directory under /tmp (must not exist before running)",
     )
+    return parser
+
+
+def _run_with_uvloop(task: Coroutine[Any, Any, T]) -> T:
+    """Run one coroutine with uvloop as the event loop implementation."""
+    try:
+        import uvloop
+    except Exception as exc:  # pragma: no cover - runtime environment issue
+        raise RuntimeError("uvloop is required but could not be imported.") from exc
+    uvloop.install()
+    return asyncio.run(task)
+
+
+async def _async_main(args: argparse.Namespace, jina_key: str) -> FetchManifest:
+    """Execute fetch workflow and return manifest payload."""
+    output_dir = _prepare_output_dir(args.out_dir)
+    content_dir = _content_dir_from_output_dir(output_dir)
+    content_dir.mkdir(parents=True, exist_ok=True)
+
+    results = await _fetch_urls(
+        urls=args.urls,
+        jina_key=jina_key,
+    )
+
+    manifest_rows: list[FetchManifestRow] = []
+    ok_count = 0
+    for index, result in enumerate(results):
+        row = FetchManifestRow(
+            index=index,
+            url=result.url,
+            status="ok" if result.ok else "error",
+            http_status=result.http_status,
+            chars=len(result.content),
+            used_browser=result.used_browser,
+            error=result.error,
+        )
+        if result.ok:
+            ok_count += 1
+            body_path = _content_path(content_dir, index)
+            _write_text_file(
+                body_path,
+                result.content if result.content.endswith("\n") else f"{result.content}\n",
+            )
+            row.content_path = str(body_path.resolve())
+        manifest_rows.append(row)
+
+    manifest_payload = FetchManifest(
+        generated_at=_utc_now_iso(),
+        output_dir=str(output_dir.resolve()),
+        content_dir=str(content_dir.resolve()),
+        total_urls=len(args.urls),
+        ok_count=ok_count,
+        error_count=len(args.urls) - ok_count,
+        results=manifest_rows,
+    )
+    return manifest_payload
+
+
+def main() -> None:
+    parser = _build_parser()
     args = parser.parse_args()
 
     jina_key = os.environ.get("JINA_AI_KEY")
@@ -59,22 +287,16 @@ async def main():
         print("Error: JINA_AI_KEY environment variable not set.", file=sys.stderr)
         sys.exit(1)
 
-    if os.path.exists(args.out):
-        print(f"Error: output file already exists: {args.out}", file=sys.stderr)
-        print("Use a unique output file name to avoid race conditions.", file=sys.stderr)
+    try:
+        manifest = _run_with_uvloop(_async_main(args, jina_key))
+        sys.stdout.write(_stdout_summary(manifest))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        print(f"Error during fetch: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    async with aiohttp.ClientSession() as session:
-        tasks = [fetch_url(session, url, jina_key) for url in args.urls]
-        results = await asyncio.gather(*tasks)
-
-    blocks = []
-    for i, (url, content) in enumerate(zip(args.urls, results)):
-        blocks.append(f"[{i}] URL: {url}\n{content}")
-    output = "\n\n".join(blocks)
-
-    _write_stdout_and_file(output, args.out)
 
 if __name__ == "__main__":
-    import aiohttp
-    asyncio.run(main())
+    main()
