@@ -192,6 +192,8 @@ curl -sS -X POST "$BASE/deleteMessage" \
 
 - Prefer `--data-urlencode text=...` so newlines / special chars are encoded correctly.
 - For formatting, `parse_mode=HTML` is usually easier than `MarkdownV2` (less escaping).
+- **Backticks and Code**: In `parse_mode=HTML`, backticks (`` ` ``) are **not** automatically rendered as code. Use `<code>...</code>` for inline code and `<pre>...</pre>` for blocks.
+- **Shell Escaping (Crucial)**: In shell scripts, avoid using double quotes `"` for variables containing backticks (e.g., `MSG="...`code`..."`), as the shell will attempt to execute the content inside backticks. Use single quotes `'` or a heredoc with quoted delimiter (`cat <<'HTML'`) to preserve backticks as literal text.
 - In shell scripts, using `cat <<'HTML'` (heredoc) allows direct use of newlines; typing `\n` literally will result in literal backslashes rather than a line break.
 - If you want to inspect the API response, parse the JSON and print it as UTF-8 (some formatters default to ASCII-escaped `\uXXXX` output):
 
